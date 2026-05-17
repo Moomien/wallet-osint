@@ -74,6 +74,7 @@ func collectTwitters(addresses []string) ([]string, []string, ArkhamStats) {
 	if maxConns < 10 {
 		maxConns = 10
 	}
+
 	client.SetTransport(&http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -89,13 +90,16 @@ func collectTwitters(addresses []string) ([]string, []string, ArkhamStats) {
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 	})
+
 	var (
 		mu      sync.Mutex
 		twitter []string
 		failed  []string
 	)
+
 	sem := make(chan struct{}, intEnv("ARKHAM_CONCURRENCY", 20))
 	rps := intEnv("ARKHAM_RPS", 16)
+
 	var limiter <-chan time.Time
 	if rps > 0 {
 		interval := time.Second / time.Duration(rps)
@@ -122,6 +126,7 @@ func collectTwitters(addresses []string) ([]string, []string, ArkhamStats) {
 				<-limiter
 			}
 			res := checker.FetchTwitterWithRetryResult(client, adr)
+
 			switch res.Status {
 			case checker.FetchOK:
 				mu.Lock()
@@ -142,6 +147,7 @@ func collectTwitters(addresses []string) ([]string, []string, ArkhamStats) {
 				stats.Failed++
 				statsMu.Unlock()
 			}
+
 			twLog := res.Twitter
 			if res.Status == checker.FetchNoTwitter {
 				twLog = "Nope"
