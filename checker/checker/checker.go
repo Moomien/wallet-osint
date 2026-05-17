@@ -5,12 +5,37 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
-func FetchTwitterWithRetry(client *resty.Client, address string) string {
+func CollectTwitters(addresses []string) []string {
+	client := resty.New()
+	twitter := make([]string, len(addresses))
+	sem := make(chan struct{}, 8) // ~20 rps
+	var wg sync.WaitGroup
+
+	for i, adres := range addresses {
+		wg.Add(1)
+		go func(idx int, adr string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			tw := fetchTwitterWithRetry(client, adr)
+			if tw != "Nope" && tw != "Failed to fetch" {
+				twitter[idx] = tw
+			}
+			slog.Info("Fetch wallet", "wallet", adr, "twitter", tw)
+		}(i, adres)
+	}
+	wg.Wait()
+
+	return twitter
+}
+
+func fetchTwitterWithRetry(client *resty.Client, address string) string {
 	url := arkhamURL(address)
 
 	exponenntialBackoff := []int{1, 2, 4, 8, 16}
