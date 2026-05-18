@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,51 +12,80 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func CollectTwitters(addresses []string) []string {
+type (
+	Twitterurl string
+)
+
+// возвращает линки и остатки адресов если есть
+func CollectTwitters(ctx context.Context, addresses []string) ([]Twitterurl, []string) {
 	client := resty.New()
-	twitter := make([]string, len(addresses))
+	twitter := make([]Twitterurl, len(addresses))
+	completed := make([]bool, len(addresses))
+
 	sem := make(chan struct{}, 8) // ~20 rps
 	var wg sync.WaitGroup
 
 	for i, adres := range addresses {
-		wg.Add(1)
-		go func(idx int, adr string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			tw := fetchTwitterWithRetry(client, adr)
-			if tw != "Nope" && tw != "Failed to fetch" {
-				twitter[idx] = tw
-			}
-			slog.Info("Fetch wallet", "wallet", adr, "twitter", tw)
-		}(i, adres)
-	}
-	wg.Wait()
+		select {
+		case <-ctx.Done():
+			goto wait
+		default:
+			wg.Add(1)
+			go func(idx int, adr string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 
-	return twitter
+				tw := fetchTwitterWithRetry(ctx, client, adr)
+				if tw == "Canceled" {
+					return
+				}
+
+				if tw != "Nope" && tw != "Failed to fetch" {
+					twitter[idx] = tw
+				}
+				completed[idx] = true
+				slog.Info("Fetch wallet", "wallet", adr, "twitter", tw)
+			}(i, adres)
+		}
+	}
+
+wait:
+	wg.Wait()
+	var rem []string
+	for i, done := range completed {
+		if !done {
+			rem = append(rem, addresses[i])
+		}
+	}
+	return twitter, rem
 }
 
-func fetchTwitterWithRetry(client *resty.Client, address string) string {
+func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string) Twitterurl {
 	url := arkhamURL(address)
 
 	exponenntialBackoff := []int{1, 2, 4, 8, 16}
 	for attempt := 0; attempt <= len(exponenntialBackoff); attempt++ {
-		resp, err := newArkhamRequest(client).Get(url)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Failed to request, retrying %d", attempt), "err", err)
-			continue
-		}
-
-		if resp.StatusCode() == 200 {
-			twitter := gjson.Get(resp.String(), "arkhamEntity.twitter")
-			if !twitter.Exists() {
-				twitter := "Nope"
-				return twitter
+		select {
+		case <-ctx.Done():
+			return "Canceled"
+		default:
+			resp, err := newArkhamRequest(client).Get(url)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Failed to request, retrying %d", attempt), "err", err)
+				continue
 			}
-			return twitter.String()
-		}
 
-		slog.Error("Arkham api returned bad status", "status", resp.StatusCode(), "attempt", attempt+1)
+			if resp.StatusCode() == 200 {
+				twitter := gjson.Get(resp.String(), "arkhamEntity.twitter")
+				if !twitter.Exists() {
+					return "Nope"
+				}
+				return Twitterurl(twitter.String())
+			}
+
+			slog.Error("Arkham api returned bad status", "status", resp.StatusCode(), "attempt", attempt+1)
+		}
 	}
 
 	return "Failed to fetch"

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -133,19 +132,19 @@ func retryafter(i int) time.Duration {
 // этот метод не будет использован в конечном чекере
 // юзы будут сразу доставаться из памяти
 // это нужно для теста
-func ExtractUsernames() []string {
-	// достаем ссылки вида
-	// https://twitter.com/Username
-	// https://x.com/Usenrname
-	twt_urls, err := os.ReadFile("usernames.txt")
-	if err != nil {
-		slog.Error("failed load txt")
-		os.Exit(1)
-	}
+// func ExtractUsernames() []string {
+// 	// достаем ссылки вида
+// 	// https://twitter.com/Username
+// 	// https://x.com/Usenrname
+// 	twt_urls, err := os.ReadFile("usernames.txt")
+// 	if err != nil {
+// 		slog.Error("failed load txt")
+// 		os.Exit(1)
+// 	}
 
-	usernames := string(twt_urls)
-	cleanedTxt := strings.ReplaceAll(usernames, "https://twitter.com/", "")
-	cleanedTxt = strings.ReplaceAll(cleanedTxt, "https://x.com/", "")
+// 	usernames := string(twt_urls)
+// 	cleanedTxt := strings.ReplaceAll(usernames, "https://twitter.com/", "")
+// 	cleanedTxt = strings.ReplaceAll(cleanedTxt, "https://x.com/", "")
 
-	return strings.Split(cleanedTxt, "\r\n")
-}
+// 	return strings.Split(cleanedTxt, "\r\n")
+// }
