@@ -40,14 +40,14 @@ func main() {
 			slog.Error("Failed to save remaining to addresses.txt", "err", err)
 		}
 	}
-	// tgUsernames := Resolver.CheckUsernames(twitter)
-	tgUsernames := Resolver.ExtractUsernames()
+	tgUsernames := Resolver.CheckUsernames(twitter)
+
 	twitterOutput(twitter, tgUsernames)
 
 }
 
 // вывод в .txt ссылок твиттера и юзернеймов тг
-func twitterOutput(twitter []checker.Twitterurl, tgUsernames []string) {
+func twitterOutput(twitter []string, tgUsernames []string) {
 	res, err := os.Create("result.txt")
 	if err != nil {
 		slog.Error("Failed to create .txt file")
@@ -57,7 +57,7 @@ func twitterOutput(twitter []checker.Twitterurl, tgUsernames []string) {
 	defer res.Close()
 
 	//удаляем мусорные строки из слайса
-	twitter = slices.DeleteFunc(twitter, func(s checker.Twitterurl) bool {
+	twitter = slices.DeleteFunc(twitter, func(s string) bool {
 		return s == ""
 	})
 

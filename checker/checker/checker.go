@@ -12,14 +12,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type (
-	Twitterurl string
-)
-
 // возвращает линки и остатки адресов если есть
-func CollectTwitters(ctx context.Context, addresses []string) ([]Twitterurl, []string) {
+func CollectTwitters(ctx context.Context, addresses []string) ([]string, []string) {
 	client := resty.New()
-	twitter := make([]Twitterurl, len(addresses))
+	twitter := make([]string, len(addresses))
 	completed := make([]bool, len(addresses))
 
 	sem := make(chan struct{}, 8) // ~20 rps
@@ -61,7 +57,7 @@ wait:
 	return twitter, rem
 }
 
-func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string) Twitterurl {
+func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string) string {
 	url := arkhamURL(address)
 
 	exponenntialBackoff := []int{1, 2, 4, 8, 16}
@@ -81,7 +77,7 @@ func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address st
 				if !twitter.Exists() {
 					return "Nope"
 				}
-				return Twitterurl(twitter.String())
+				return twitter.String()
 			}
 
 			slog.Error("Arkham api returned bad status", "status", resp.StatusCode(), "attempt", attempt+1)
