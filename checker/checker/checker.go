@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"arkham_checker/checker/storage"
 	"context"
 	"fmt"
 	"log/slog"
@@ -13,7 +14,9 @@ import (
 )
 
 // возвращает линки и остатки адресов если есть
-func CollectTwitters(ctx context.Context, addresses []string) ([]string, []string) {
+func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string) ([]string, []string) {
+	defer db.DB.Close()
+
 	client := resty.New()
 	twitter := make([]string, len(addresses))
 	completed := make([]bool, len(addresses))
@@ -49,11 +52,20 @@ func CollectTwitters(ctx context.Context, addresses []string) ([]string, []strin
 wait:
 	wg.Wait()
 	var rem []string
+	var batch []string
 	for i, done := range completed {
 		if !done {
 			rem = append(rem, addresses[i])
+		} else {
+			batch = append(batch, addresses[i])
 		}
 	}
+
+	if err := db.Save(batch); err != nil {
+		slog.Error("DB Saver", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Успешно сохранил адреса в бд")
 	return twitter, rem
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"arkham_checker/checker/checker"
 	Resolver "arkham_checker/checker/resolver"
+	"arkham_checker/checker/storage"
 	"context"
 	"fmt"
 	"log/slog"
@@ -30,9 +31,23 @@ func main() {
 	}
 
 	addresses := strings.Fields(string(s))
+	db, err := storage.NewBadgerDB()
+	if err != nil {
+		slog.Error("New DB", "Error", err)
+		os.Exit(1)
+	}
+	uniqaddresses, err := db.UniqueAddresses(addresses)
+	if err != nil {
+		slog.Error("DB unique", "Error", err)
+		os.Exit(1)
+	}
+	if len(uniqaddresses) != len(addresses) {
+		fmt.Printf("Удалено %d строк.\n Уникальные адреса: %d",
+			len(addresses)-len(uniqaddresses), len(uniqaddresses))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	twitter, remaining := checker.CollectTwitters(ctx, addresses)
+	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses)
 	if len(remaining) > 0 {
 		str := strings.Join(remaining, "\n")
 		bs := []byte(str)
