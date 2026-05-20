@@ -20,7 +20,7 @@ type Resolver struct {
 	botToken string
 }
 
-func CheckUsernames(usernames []string) (addr []string) {
+func CheckUsernames(addresses []string) (addr []string) {
 	resolver := newResolver()
 
 	var (
@@ -34,10 +34,10 @@ func CheckUsernames(usernames []string) (addr []string) {
 			return err
 		}
 
-		wg.Add(len(usernames))
+		wg.Add(len(addresses))
 		sem := make(chan struct{}, 5)
 
-		for _, user := range usernames {
+		for _, user := range addresses {
 			go func(user string) {
 				defer wg.Done()
 

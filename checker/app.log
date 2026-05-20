@@ -1,0 +1,4 @@
+{"time":"2026-05-20T22:33:00.0692021+03:00","level":"INFO","msg":"Application started","time":"2026-05-20T22:33:00.0692021+03:00"}
+{"time":"2026-05-20T22:33:00.0971696+03:00","level":"INFO","msg":"Успешно сохранил адреса в бд"}
+{"time":"2026-05-20T22:33:00.0987177+03:00","level":"INFO","msg":"Saving remaining to addresses.txt!"}
+{"time":"2026-05-20T22:33:00.0992342+03:00","level":"INFO","msg":"File addresses.txt successfully updated","Remaining":0}

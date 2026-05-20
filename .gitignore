@@ -1,1 +1,4 @@
 *.env
+*addresses.txt
+*usernames.txt
+play/
