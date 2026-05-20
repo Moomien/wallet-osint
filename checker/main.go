@@ -70,7 +70,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses)
+	proxyflag := os.Args[1]
+	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses, proxyflag)
 
 	//удаляем отчеканные адреса и оставляем остатки, если есть
 	slog.Info("Saving remaining to addresses.txt!")
@@ -94,12 +95,11 @@ func main() {
 
 // вывод в .txt ссылок твиттера и юзернеймов тг
 func twitterOutput(twitter []string, tgUsernames []string) {
-	res, err := os.Create("result.txt")
+	res, err := os.OpenFile("result.txt", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		slog.Error("Failed to create .txt file")
+		slog.Error("Failed to read or create .txt file")
 		os.Exit(1)
 	}
-
 	defer res.Close()
 
 	//удаляем мусорные строки из слайса
@@ -111,10 +111,11 @@ func twitterOutput(twitter []string, tgUsernames []string) {
 	tglen := len(tgUsernames)
 	fmt.Fprintf(w, "TWITTER \t TELEGRAM\n")
 	for i, item := range twitter {
+		tg := "-"
 		if i < tglen {
-			fmt.Fprintf(w, "%s \t %s\n", item, tgUsernames[i])
+			tg = tgUsernames[i]
 		}
-		fmt.Fprintf(w, "%s", item)
+		fmt.Fprintf(w, "%s \t %s\n", item, tg)
 	}
 
 	if err := w.Flush(); err != nil {

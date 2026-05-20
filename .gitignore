@@ -1,4 +1,8 @@
 *.env
-*addresses.txt
-*usernames.txt
+checker/addresses.txt
+checker/usernames.txt
 play/
+checker/app.log
+checker/proxy.txt
+checker/addresses_db/
+checker/result.txt

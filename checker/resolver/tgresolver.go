@@ -20,7 +20,7 @@ type Resolver struct {
 	botToken string
 }
 
-func CheckUsernames(addresses []string) (addr []string) {
+func CheckUsernames(addresses []string) (usernames []string) {
 	resolver := newResolver()
 
 	var (
@@ -45,13 +45,11 @@ func CheckUsernames(addresses []string) (addr []string) {
 				defer func() { <-sem }()
 
 				resolved, err := resolver.api.
-					ContactsResolveUsername(ctx,
-						&tg.ContactsResolveUsernameRequest{Username: user})
+					ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: user})
 
 				if err != nil {
 					if rpcErr, ok := tgerr.As(err); ok {
-						fmt.Println("RPC error message:", rpcErr.Message)
-						fmt.Println("Username:", user)
+						slog.Error(fmt.Sprintf("RPC : %s for %s", rpcErr.Message, user))
 					}
 					//ретраим если попали в лимит
 					if tgerr.Is(err, "FLOOD_WAIT") {
@@ -69,7 +67,7 @@ func CheckUsernames(addresses []string) (addr []string) {
 
 							if len(resolved.Chats) > 0 || len(resolved.Users) > 0 {
 								mu.Lock()
-								addr = append(addr, user)
+								usernames = append(usernames, user)
 								mu.Unlock()
 							}
 						}
@@ -81,7 +79,7 @@ func CheckUsernames(addresses []string) (addr []string) {
 				//если все норм никаких лимитов - добавляем
 				if len(resolved.Users) > 0 || len(resolved.Chats) > 0 {
 					mu.Lock()
-					addr = append(addr, user)
+					usernames = append(usernames, user)
 					mu.Unlock()
 				} else {
 					return
@@ -98,7 +96,7 @@ func CheckUsernames(addresses []string) (addr []string) {
 		os.Exit(1)
 	}
 
-	return addr
+	return usernames
 }
 
 func newResolver() *Resolver {

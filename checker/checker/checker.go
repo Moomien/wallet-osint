@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -16,7 +17,7 @@ import (
 )
 
 // возвращает линки и остатки адресов если есть
-func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string) ([]string, []string) {
+func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string, flag string) ([]string, []string) {
 	defer db.DB.Close()
 
 	goLimiter := NewRateLimiter(20, 5)
@@ -39,7 +40,7 @@ func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				tw := fetchTwitterWithRetry(ctx, client, adr)
+				tw := fetchTwitterWithRetry(ctx, client, adr, flag)
 				if tw == "Canceled" {
 					return
 				}
@@ -84,7 +85,11 @@ wait:
 	return twitter, rem
 }
 
-func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string) string {
+type ctxKey string
+
+const proxykey ctxKey = "request_proxy"
+
+func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string, flag string) string {
 	url := arkhamURL(address)
 
 	exponenntialBackoff := []time.Duration{
@@ -97,7 +102,7 @@ func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address st
 		case <-ctx.Done():
 			return "Canceled"
 		default:
-			resp, err := newArkhamRequest(client).SetContext(ctx).Get(url)
+			resp, err := newArkhamRequest(client, flag).SetContext(ctx).Get(url)
 			if err != nil {
 				if ctx.Err() != nil {
 					return "Canceled"
@@ -109,13 +114,15 @@ func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address st
 			if resp.StatusCode() == 429 {
 				duration := resp.Header().Get("Retry-After")
 				var sleepDur time.Duration
+				//джиттер чтобы избежать эффект грохочущего стада
+				jitter := time.Duration(rand.Intn(30000)) * time.Millisecond
 
 				dur, err := strconv.ParseInt(duration, 10, 64)
 				if err == nil {
-					sleepDur = time.Duration(dur) * time.Second
+					sleepDur = time.Duration(dur)*time.Second + jitter
 				}
 				if sleepDur == 0 {
-					sleepDur = exponenntialBackoff[attempt]
+					sleepDur = exponenntialBackoff[attempt] + jitter
 				}
 				slog.Info(fmt.Sprintf("429: too many requests, sleep for %v seconds for wallet: %s", sleepDur, address))
 
@@ -141,8 +148,38 @@ func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address st
 	return "Failed to fetch"
 }
 
-func newArkhamRequest(client *resty.Client) *resty.Request {
+func getProxy() (func() string, error) {
+	file, err := os.ReadFile("proxy.txt")
+	if err != nil {
+		return nil, err
+	}
+	str := strings.Split(string(file), "\r\n")
+	lastProxy := str[rand.Intn(len(str))]
+
+	return func() string {
+		newProxy := str[rand.Intn(len(str))]
+		for newProxy == lastProxy {
+			newProxy = str[rand.Intn(len(str))]
+		}
+		lastProxy = newProxy
+		return newProxy
+	}, nil
+}
+
+func newArkhamRequest(client *resty.Client, flag string) *resty.Request {
 	cookie := os.Getenv("cookie")
+	if flag == "proxy" {
+		selectproxy, err := getProxy()
+		if err != nil {
+			return nil
+		}
+		return client.SetProxy(selectproxy()).NewRequest().SetHeader("Connection", "keep-alive").SetHeader("Accept", "application/json").
+			SetHeader("Accept-language", "en-US,en;q=0.9").SetHeader("Origin", "https://intel.arkm.com").
+			SetHeader("pragma", "no-cache").SetHeader("priority", "u=1, i").SetHeader("Referer", "https://intel.arkm.com/").
+			SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36").
+			SetHeader("Cookie", cookie)
+	}
+
 	return client.NewRequest().SetHeader("Connection", "keep-alive").SetHeader("Accept", "application/json").
 		SetHeader("Accept-language", "en-US,en;q=0.9").SetHeader("Origin", "https://intel.arkm.com").
 		SetHeader("pragma", "no-cache").SetHeader("priority", "u=1, i").SetHeader("Referer", "https://intel.arkm.com/").
