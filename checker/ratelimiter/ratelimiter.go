@@ -1,4 +1,4 @@
-package checker
+package ratelimiter
 
 import (
 	"context"
@@ -14,6 +14,7 @@ func NewRateLimiter(r, b int) *RateLimiter {
 	return &RateLimiter{limiter: rate.NewLimiter(rate.Limit(r), b)}
 }
 
+// имплементация интерфейса для использования в resty
 func (r *RateLimiter) Allow() bool {
 	//используем Wait вместо Allow чтобы запросы выстраивались в очередь, а не падали
 	if err := r.limiter.Wait(context.Background()); err != nil {

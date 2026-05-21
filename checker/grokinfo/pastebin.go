@@ -13,12 +13,7 @@ type Pastebin struct {
 	//
 	//то что идет в боди для каждого запроса
 	ApiKey string
-	Text   string
 	Option string
-}
-
-func (p *Pastebin) setText(text string) {
-	p.Text = text
 }
 
 func (p *Pastebin) setOption(option string) {
@@ -35,10 +30,9 @@ func NewPastebin() *Pastebin {
 
 // делает пост запрос и возвращает полученную ссылку
 func (p *Pastebin) CreatePaste(text, option string) (string, error) {
-	p.setText(text)
 	p.setOption(option)
 
-	req := p.pastebinrequest()
+	req := p.pastebinrequest(text)
 	resp, err := req.Post("https://pastebin.com/api/api_post.php")
 	if err != nil {
 		return "", err
@@ -48,10 +42,10 @@ func (p *Pastebin) CreatePaste(text, option string) (string, error) {
 	return string(body), nil
 }
 
-func (p *Pastebin) pastebinrequest() *resty.Request {
+func (p *Pastebin) pastebinrequest(text string) *resty.Request {
 	request := p.Client.NewRequest().SetFormData(map[string]string{
 		"api_dev_key":    p.ApiKey,
-		"api_paste_code": p.Text,
+		"api_paste_code": text,
 		"api_option":     p.Option,
 	})
 	return request

@@ -6,3 +6,8 @@ checker/app.log
 checker/proxy.txt
 checker/addresses_db/
 checker/result.txt
+*test.txt
+*prompt.txt
+*proxy.txt
+checker/dune_parser.txt
+*curl.txt

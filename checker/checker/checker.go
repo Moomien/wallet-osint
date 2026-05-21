@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"arkham_checker/checker/ratelimiter"
 	"arkham_checker/checker/storage"
 	"context"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string, flag string) ([]string, []string) {
 	defer db.DB.Close()
 
-	goLimiter := NewRateLimiter(20, 5)
+	goLimiter := ratelimiter.NewRateLimiter(20, 5)
 	client := resty.New().SetRateLimiter(goLimiter)
 
 	twitter := make([]string, len(addresses))
