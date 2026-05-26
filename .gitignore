@@ -11,3 +11,7 @@ checker/result.txt
 *proxy.txt
 checker/dune_parser.txt
 *curl.txt
+checker/session/cookies/*
+!checker/session/cookies/.gitkeep
+checker/session/cache.json
+session.log
