@@ -40,7 +40,7 @@ type Cookie struct {
 // аллоцирует куки в мапу
 func NewCache() (*CacheSession, error) {
 	//делаем отдельный логгер для этого модуля
-	logger, err := log.NewLogger("session.log")
+	logger, err := log.NewLogger("session")
 	if err != nil {
 		return nil, fmt.Errorf("создание логгера: %w", err)
 	}
@@ -81,7 +81,7 @@ func NewCache() (*CacheSession, error) {
 		return nil, fmt.Errorf("запуск playwright: %w", err)
 	}
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(false),
+		Headless: playwright.Bool(true),
 	})
 	if err != nil {
 		_ = pw.Stop()
@@ -157,6 +157,7 @@ func (c *CacheSession) CheckSession() {
 		c.Logger.Error("HE удалось создать новый контекст браузера", "err", err)
 		return
 	}
+	c.Logger.Info("Создал браузер")
 	defer ctx.Close()
 
 	//добавляем куки в контекст
@@ -314,6 +315,9 @@ func cacheJSON(data map[string]*SessionInfo) error {
 	dir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("рабочая директория: %w", err)
+	}
+	if strings.Contains(dir, "session") {
+		dir = filepath.Dir(dir)
 	}
 	cachepath := filepath.Join(dir, "session/cache.json")
 	prettyJSON, err := json.MarshalIndent(data, "", "  ")
