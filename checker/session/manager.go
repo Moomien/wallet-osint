@@ -16,6 +16,13 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
+const (
+	selectorChatInput = "div[contenteditable='true']"
+	selectorLimitMsg  = "#last-reply-container >> text=Достигнут лимит сообщений"
+	testCheckMessage  = "Heeey grok testing you just and so"
+	limitCheckTimeout = 4000
+)
+
 // CacheSession управляет сессиями Playwright и их кэшированием.
 type CacheSession struct {
 	mu        sync.RWMutex
@@ -246,14 +253,14 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 	}
 
 	c.log.Info("Ввожу текст в чат грока")
-	textarea := page.Locator("div[contenteditable='true']").First()
+	textarea := page.Locator(selectorChatInput).First()
 	if err = textarea.Click(); err != nil {
 		c.log.Error("HE удалось найти нужный селектор для ввода в чат грок", "err", err)
 		return
 	}
 
 	c.log.Info("клик на поле ввода")
-	if err = textarea.Fill("Heeey grok testing you just and so"); err != nil {
+	if err = textarea.Fill(testCheckMessage); err != nil {
 		c.log.Error("HE получилось ввести сообщение", "err", err)
 		return
 	}
@@ -270,11 +277,11 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 		State: playwright.LoadStateNetworkidle,
 	})
 
-	//ищем селектор лимита до 4 секунд
-	limitLocator := page.Locator("#last-reply-container >> text=Достигнут лимит сообщений")
+	//ищем селектор лимита
+	limitLocator := page.Locator(selectorLimitMsg)
 	err = limitLocator.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(4000),
+		Timeout: playwright.Float(limitCheckTimeout),
 	})
 
 	if err == nil {
