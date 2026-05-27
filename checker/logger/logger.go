@@ -14,10 +14,10 @@ type Logger struct {
 	logfile *os.File
 }
 
-func NewLogger(name string) (*Logger, error) {
-	logger, logfile, err := newLogger(name)
+func NewLogger(filename string) (*Logger, error) {
+	logger, logfile, err := newLogger(filename)
 	if err != nil {
-		return nil, fmt.Errorf("HE получилось создать логгер %s. Error: %w", name, err)
+		return nil, fmt.Errorf("HE получилось создать логгер %s. Error: %w", filename, err)
 	}
 	return &Logger{
 		Log:     logger,
@@ -36,7 +36,12 @@ func newLogger(name string) (*slog.Logger, *os.File, error) {
 		dir = filepath.Dir(dir)
 	}
 
-	logpath := filepath.Join(dir, "logs/", strings.TrimSpace(name)+".log")
+	logDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, nil, fmt.Errorf("HE удалось создать директорию логов: %w", err)
+	}
+
+	logpath := filepath.Join(logDir, strings.TrimSpace(name)+".log")
 	file, err := os.OpenFile(logpath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, nil, fmt.Errorf("HE удалось открыть файл лога: %w", err)

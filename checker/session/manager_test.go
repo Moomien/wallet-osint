@@ -1,26 +1,35 @@
 package session
 
 import (
+	"context"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"testing"
 )
 
+const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 func TestManager(t *testing.T) {
-	sessManager, err := NewCache()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	sessManager, err := NewCache(false, "grok.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sessManager.Close()
-	defer sessManager.Logger.Close()
+
 	var wg sync.WaitGroup
-	for range len(sessManager.data) {
+	for range 1 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sessManager.CheckSession()
+			sessManager.CheckSession(ctx, ua)
 		}()
 	}
 	wg.Wait()
+
 	t.Log("Горутины успешно выполнены!")
 	cookie, err := sessManager.GetSession()
 	if err != nil {

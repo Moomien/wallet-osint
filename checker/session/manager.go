@@ -24,7 +24,7 @@ type CacheSession struct {
 	domain    string
 	pw        *playwright.Playwright
 	Browser   playwright.Browser
-	Logger    *log.Logger
+	log       *log.Logger
 }
 
 // SessionInfo содержит данные о состоянии конкретной сессии.
@@ -110,7 +110,7 @@ func NewCache(headless bool, domain string) (*CacheSession, error) {
 		domain:    domain,
 		pw:        pw,
 		Browser:   browser,
-		Logger:    logger,
+		log:       logger,
 	}
 	if err = c.cacheJSON(); err != nil {
 		return nil, fmt.Errorf("инициализация cache.json: %w", err)
@@ -145,7 +145,7 @@ func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, error) {
 		c.mu.RLock()
 		defer c.mu.RUnlock()
 		if err := c.cacheJSON(); err != nil {
-			c.Logger.Error("Асинхронное обновление кэша провалено", "err", err)
+			c.log.Error("Асинхронное обновление кэша провалено", "err", err)
 		}
 	}()
 
@@ -177,7 +177,7 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 
 	if !found {
 		c.mu.Unlock()
-		c.Logger.Info("Нет доступных аккаунтов для проверки")
+		c.log.Info("Нет доступных аккаунтов для проверки")
 		return
 	}
 
@@ -197,10 +197,10 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 		UserAgent: playwright.String(useragent),
 	})
 	if err != nil {
-		c.Logger.Error("HE удалось создать новый контекст браузера", "err", err)
+		c.log.Error("HE удалось создать новый контекст браузера", "err", err)
 		return
 	}
-	c.Logger.Info("Создал браузер")
+	c.log.Info("Создал браузер")
 	defer browserCtx.Close()
 
 	// Горутина для мгновенной отмены при Ctrl+C
@@ -216,13 +216,13 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 
 	//добавляем куки в контекст
 	if err = browserCtx.AddCookies(cookie); err != nil {
-		c.Logger.Error("не удалось добавить куки в контекст", "err", err)
+		c.log.Error("не удалось добавить куки в контекст", "err", err)
 		c.mu.Lock()
 		if session, ok := c.data[targetKey]; ok {
 			session.Valid = false
 			session.LastChecked = time.Now()
 			if err := c.cacheJSON(); err != nil {
-				c.Logger.Error("критическая ошибка: не удалось обновить cache.json после сбоя кук", "err", err)
+				c.log.Error("критическая ошибка: не удалось обновить cache.json после сбоя кук", "err", err)
 			}
 		}
 		c.mu.Unlock()
@@ -232,7 +232,7 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 	//новая страница
 	page, err := browserCtx.NewPage()
 	if err != nil {
-		c.Logger.Error("HE удалось создать новую страницу в браузере", "err", err)
+		c.log.Error("HE удалось создать новую страницу в браузере", "err", err)
 		return
 	}
 	targetURL := fmt.Sprintf("https://%s", c.domain)
@@ -241,31 +241,34 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 		WaitUntil: playwright.WaitUntilStateNetworkidle,
 	})
 	if err != nil {
-		c.Logger.Warn("HE получилось зайти на целевую страницу", "err", err)
+		c.log.Warn("HE получилось зайти на целевую страницу", "err", err)
 		return
 	}
 
-	c.Logger.Info("Ввожу текст в чат грока")
+	c.log.Info("Ввожу текст в чат грока")
 	textarea := page.Locator("div[contenteditable='true']").First()
 	if err = textarea.Click(); err != nil {
-		c.Logger.Error("HE удалось найти нужный селектор для ввода в чат грок", "err", err)
+		c.log.Error("HE удалось найти нужный селектор для ввода в чат грок", "err", err)
 		return
 	}
 
-	c.Logger.Info("клик на поле ввода")
+	c.log.Info("клик на поле ввода")
 	if err = textarea.Fill("Heeey grok testing you just and so"); err != nil {
-		c.Logger.Error("HE получилось ввести сообщение", "err", err)
+		c.log.Error("HE получилось ввести сообщение", "err", err)
 		return
 	}
 
 	//отправка сообщения
-	c.Logger.Info("Ввод текста")
+	c.log.Info("Ввод текста")
 	if err = page.Keyboard().Press("Enter"); err != nil {
-		c.Logger.Error("HE удалось отправить текст", "err", err)
+		c.log.Error("HE удалось отправить текст", "err", err)
 		return
 	}
-	c.Logger.Info("Отправил текст")
-	time.Sleep(500 * time.Millisecond)
+	c.log.Info("Отправил текст")
+	//ждем ответа
+	_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateNetworkidle,
+	})
 
 	//ищем селектор лимита до 4 секунд
 	limitLocator := page.Locator("#last-reply-container >> text=Достигнут лимит сообщений")
@@ -275,21 +278,21 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 	})
 
 	if err == nil {
-		c.Logger.Info("АККАУНТ B ЛИМИТЕ: Найдено сообщение в контейнере ответа!", "session_key", targetKey)
+		c.log.Info("АККАУНТ B ЛИМИТЕ: Найдено сообщение в контейнере ответа!", "session_key", targetKey)
 		session.Valid = false
 	} else {
-		c.Logger.Info("Лимита нет, всё ок.", "session_key", targetKey)
+		c.log.Info("Лимита нет, всё ок.", "session_key", targetKey)
 		session.Valid = true
 	}
 	session.LastChecked = time.Now()
 	//обновление в cache.json
 	if err = c.cacheJSON(); err != nil {
-		c.Logger.Error("HE получилось обновить данные в cache.json", "err", err)
+		c.log.Error("HE получилось обновить данные в cache.json", "err", err)
 		return
 	}
 }
 
-// Close корректно завершает работу браузера и Playwright.
+// Close корректно завершает работу браузера и Playwright и логгера
 func (c *CacheSession) Close() error {
 	var errs []string
 	if c.pw != nil {
@@ -299,6 +302,12 @@ func (c *CacheSession) Close() error {
 	}
 	if c.Browser != nil {
 		if err := c.Browser.Close(); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
+	if c.log != nil {
+		if err := c.log.Close(); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
