@@ -2,6 +2,7 @@ package session
 
 import (
 	log "arkham_checker/checker/logger"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,14 +16,18 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
+// CacheSession управляет сессиями Playwright и их кэшированием.
 type CacheSession struct {
-	mu      sync.RWMutex
-	data    map[string]*SessionInfo
-	pw      *playwright.Playwright
-	browser playwright.Browser
-	Logger  *log.Logger
+	mu        sync.RWMutex
+	data      map[string]*SessionInfo
+	cachePath string
+	domain    string
+	pw        *playwright.Playwright
+	Browser   playwright.Browser
+	Logger    *log.Logger
 }
 
+// SessionInfo содержит данные о состоянии конкретной сессии.
 type SessionInfo struct {
 	Cookies     []playwright.OptionalCookie `json:"cookies"`
 	Valid       bool                        `json:"Valid"`
@@ -35,17 +40,20 @@ type Cookie struct {
 	Value string `json:"value"`
 }
 
+// NewCache создает новый экземпляр менеджера сессий и инициализирует браузер.
 // собирает один единый json файл из множества других json
 // запускает чек куки и проходится по каждому куки из json и
 // аллоцирует куки в мапу
-func NewCache() (*CacheSession, error) {
+func NewCache(headless bool, domain string) (*CacheSession, error) {
 	//делаем отдельный логгер для этого модуля
-	logger, err := log.NewLogger("session")
+	baseDir := "session"
+	cachePath := filepath.Join(baseDir, "cache.json")
+	logger, err := log.NewLogger(baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("создание логгера: %w", err)
 	}
 
-	cookies, err := cookieS(logger.Log)
+	cookies, err := cookieS(logger.Log, cachePath)
 	if err != nil {
 		return nil, fmt.Errorf("загрузка куки: %w", err)
 	}
@@ -58,7 +66,7 @@ func NewCache() (*CacheSession, error) {
 			pwCookies = append(pwCookies, playwright.OptionalCookie{
 				Name:     c.Name,
 				Value:    c.Value,
-				Domain:   playwright.String("grok.com"),
+				Domain:   playwright.String(domain),
 				Path:     playwright.String("/"),
 				Secure:   playwright.Bool(true),
 				HttpOnly: playwright.Bool(false),
@@ -72,50 +80,85 @@ func NewCache() (*CacheSession, error) {
 		}
 	}
 
-	if err = cacheJSON(data); err != nil {
-		return nil, fmt.Errorf("инициализация cache.json: %w", err)
-	}
-
 	pw, err := playwright.Run()
 	if err != nil {
 		return nil, fmt.Errorf("запуск playwright: %w", err)
 	}
+
+	success := false
+	defer func() {
+		if !success {
+			_ = pw.Stop()
+		}
+	}()
+
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
+		Headless: playwright.Bool(headless),
 	})
 	if err != nil {
-		_ = pw.Stop()
 		return nil, fmt.Errorf("запуск браузера chromium: %w", err)
 	}
-	return &CacheSession{
-		data:    data,
-		pw:      pw,
-		browser: browser,
-		Logger:  logger,
-	}, nil
+	defer func() {
+		if !success {
+			_ = browser.Close()
+		}
+	}()
+
+	c := &CacheSession{
+		data:      data,
+		cachePath: cachePath,
+		domain:    domain,
+		pw:        pw,
+		Browser:   browser,
+		Logger:    logger,
+	}
+	if err = c.cacheJSON(); err != nil {
+		return nil, fmt.Errorf("инициализация cache.json: %w", err)
+	}
+
+	success = true
+	return c, nil
 }
 
-// проходится по кэшу и возвращает первые найденные куки из кэша
+// GetSession возвращает первую доступную валидную куку из кэша.
 func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	var targetCookies []playwright.OptionalCookie
+	found := false
 
 	for _, session := range c.data {
 		if !session.Valid {
 			continue
 		}
 		session.LastChecked = time.Now()
-		if err := cacheJSON(c.data); err != nil {
-			return nil, fmt.Errorf("обновление кэша: %w", err)
-		}
-		return session.Cookies, nil
+		targetCookies = session.Cookies
+		found = true
+		break
+	}
+	c.mu.Unlock()
+
+	if !found {
+		return nil, errors.New("валидная сессия не найдена")
 	}
 
-	return nil, errors.New("валидная сессия не найдена")
+	go func() {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		if err := c.cacheJSON(); err != nil {
+			c.Logger.Error("Асинхронное обновление кэша провалено", "err", err)
+		}
+	}()
+
+	return targetCookies, nil
 }
 
-// берет первую валидную куку из кэша, заходит на аккаунт и проверяет валидность сессии
-func (c *CacheSession) CheckSession() {
+// CheckSession проверяет валидность сессии, выполняя тестовое действие в браузере.
+func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 	c.mu.Lock()
 	var targetKey string
 	var oldest time.Time
@@ -150,24 +193,35 @@ func (c *CacheSession) CheckSession() {
 	}()
 
 	//создаем изолированную сессию в браузере
-	ctx, err := c.browser.NewContext(playwright.BrowserNewContextOptions{
-		UserAgent: playwright.String("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	browserCtx, err := c.Browser.NewContext(playwright.BrowserNewContextOptions{
+		UserAgent: playwright.String(useragent),
 	})
 	if err != nil {
 		c.Logger.Error("HE удалось создать новый контекст браузера", "err", err)
 		return
 	}
 	c.Logger.Info("Создал браузер")
-	defer ctx.Close()
+	defer browserCtx.Close()
+
+	// Горутина для мгновенной отмены при Ctrl+C
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			browserCtx.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
 
 	//добавляем куки в контекст
-	if err = ctx.AddCookies(cookie); err != nil {
+	if err = browserCtx.AddCookies(cookie); err != nil {
 		c.Logger.Error("не удалось добавить куки в контекст", "err", err)
 		c.mu.Lock()
 		if session, ok := c.data[targetKey]; ok {
 			session.Valid = false
 			session.LastChecked = time.Now()
-			if err := cacheJSON(c.data); err != nil {
+			if err := c.cacheJSON(); err != nil {
 				c.Logger.Error("критическая ошибка: не удалось обновить cache.json после сбоя кук", "err", err)
 			}
 		}
@@ -176,18 +230,18 @@ func (c *CacheSession) CheckSession() {
 	}
 
 	//новая страница
-	page, err := ctx.NewPage()
+	page, err := browserCtx.NewPage()
 	if err != nil {
 		c.Logger.Error("HE удалось создать новую страницу в браузере", "err", err)
 		return
 	}
-	//переход в чат грока
-	_, err = page.Goto("https://grok.com",
-		playwright.PageGotoOptions{
-			WaitUntil: playwright.WaitUntilStateNetworkidle,
-		})
+	targetURL := fmt.Sprintf("https://%s", c.domain)
+	//переход на домен
+	_, err = page.Goto(targetURL, playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+	})
 	if err != nil {
-		c.Logger.Warn("HE получилось зайти на страницу grok.com", "err", err)
+		c.Logger.Warn("HE получилось зайти на целевую страницу", "err", err)
 		return
 	}
 
@@ -217,7 +271,7 @@ func (c *CacheSession) CheckSession() {
 	limitLocator := page.Locator("#last-reply-container >> text=Достигнут лимит сообщений")
 	err = limitLocator.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
+		Timeout: playwright.Float(4000),
 	})
 
 	if err == nil {
@@ -229,13 +283,13 @@ func (c *CacheSession) CheckSession() {
 	}
 	session.LastChecked = time.Now()
 	//обновление в cache.json
-	if err = cacheJSON(c.data); err != nil {
+	if err = c.cacheJSON(); err != nil {
 		c.Logger.Error("HE получилось обновить данные в cache.json", "err", err)
 		return
 	}
 }
 
-// закрытие pw и драйвера
+// Close корректно завершает работу браузера и Playwright.
 func (c *CacheSession) Close() error {
 	var errs []string
 	if c.pw != nil {
@@ -243,8 +297,8 @@ func (c *CacheSession) Close() error {
 			errs = append(errs, err.Error())
 		}
 	}
-	if c.browser != nil {
-		if err := c.browser.Close(); err != nil {
+	if c.Browser != nil {
+		if err := c.Browser.Close(); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -256,20 +310,25 @@ func (c *CacheSession) Close() error {
 	return nil
 }
 
+// сохраняет мапу в cache.json
+func (c *CacheSession) cacheJSON() error {
+	c.mu.RLock()
+	prettyJSON, err := json.MarshalIndent(c.data, "", "  ")
+	c.mu.RUnlock()
+
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+
+	return os.WriteFile(c.cachePath, prettyJSON, 0644)
+}
+
 // собирает куки из session/cookies и
 // возвращает слайс куки, которые потом пишем в мапу для playwright
-func cookieS(log *slog.Logger) ([][]Cookie, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("получение рабочей директории: %w", err)
-	}
-
-	if strings.Contains(dir, "session") {
-		dir = filepath.Dir(dir)
-	}
-	dir = filepath.Join(dir, "session/cookies")
-
-	files, err := os.ReadDir(dir)
+func cookieS(log *slog.Logger, cachePath string) ([][]Cookie, error) {
+	dir := filepath.Dir(cachePath)
+	cookiesPath := filepath.Join(dir, "cookies")
+	files, err := os.ReadDir(cookiesPath)
 	if err != nil {
 		return nil, fmt.Errorf("чтение директории куки %s: %w", dir, err)
 	}
@@ -283,7 +342,7 @@ func cookieS(log *slog.Logger) ([][]Cookie, error) {
 			continue
 		}
 
-		fullpath := filepath.Join(dir, file.Name())
+		fullpath := filepath.Join(cookiesPath, file.Name())
 		bs, err := os.ReadFile(fullpath)
 		if err != nil {
 			log.Warn("пропуск файла: ошибка чтения", "file", file.Name(), "err", err)
@@ -308,24 +367,4 @@ func cookieS(log *slog.Logger) ([][]Cookie, error) {
 		allCookies = append(allCookies, cookie)
 	}
 	return allCookies, nil
-}
-
-// сохраняет мапу в cache.json
-func cacheJSON(data map[string]*SessionInfo) error {
-	dir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("рабочая директория: %w", err)
-	}
-	if strings.Contains(dir, "session") {
-		dir = filepath.Dir(dir)
-	}
-	cachepath := filepath.Join(dir, "session/cache.json")
-	prettyJSON, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal json: %w", err)
-	}
-	if err := os.WriteFile(cachepath, prettyJSON, 0644); err != nil {
-		return fmt.Errorf("запись файла %s: %w", cachepath, err)
-	}
-	return nil
 }

@@ -15,3 +15,5 @@ checker/session/cookies/*
 !checker/session/cookies/.gitkeep
 checker/session/cache.json
 session.log
+session/
+logs
