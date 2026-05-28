@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	selectorChatInput = "div[contenteditable='true']"
-	selectorLimitMsg  = "#last-reply-container >> text=Достигнут лимит сообщений"
+	selectorChatInput  = "div[contenteditable='true']"
+	selectorLimitMsg   = "#last-reply-container >> text=Достигнут лимит сообщений"
 	selectorStopButton = "button[aria-label*='Stop']"
 )
 
@@ -27,6 +27,7 @@ type Interceptor struct {
 type CapturedRequest struct {
 	Headers map[string]string
 	Body    string
+	URL     string
 }
 
 func NewInterceptor(s *session.CacheSession) (*Interceptor, error) {
@@ -80,6 +81,7 @@ func (i *Interceptor) Capture(ctx context.Context, useragent string) (*CapturedR
 			captured <- &CapturedRequest{
 				Headers: request.Headers(),
 				Body:    body,
+				URL:     request.URL(),
 			}
 		}
 	})
@@ -135,7 +137,7 @@ func (i *Interceptor) sendMessage(ctx context.Context, page playwright.Page, msg
 
 	// Ожидаем начала и завершения генерации ответа через Locator
 	stopBtn := page.Locator(selectorStopButton)
-	
+
 	i.log.Info("Ожидаю начала ответа...")
 	_ = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,

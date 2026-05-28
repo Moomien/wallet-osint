@@ -1,4 +1,4 @@
-package grokinfo
+package paste
 
 import (
 	"testing"
@@ -13,8 +13,7 @@ func TestCreatePaste(t *testing.T) {
 	pastebin := NewPastebin()
 	t.Logf("api_dev_key вот такой: %v", pastebin.ApiKey)
 	sometxt := "sometxttxtxtxtxttxtxt"
-	option := "paste"
-	str, err := pastebin.CreatePaste(sometxt, option)
+	str, err := pastebin.CreatePaste(sometxt)
 	if err != nil {
 		t.Errorf("Failed to send post-request: %v", err)
 	}

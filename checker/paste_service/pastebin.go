@@ -1,4 +1,4 @@
-package grokinfo
+package paste
 
 import (
 	"os"
@@ -6,7 +6,11 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-//здесь будет реализация сохранения текста на pastebin
+//реализация сохранения текста на сервис pastebin
+
+type Paste interface {
+	CreatePaste(text string) (string, error)
+}
 
 type Pastebin struct {
 	Client *resty.Client
@@ -14,10 +18,6 @@ type Pastebin struct {
 	//то что идет в боди для каждого запроса
 	ApiKey string
 	Option string
-}
-
-func (p *Pastebin) setOption(option string) {
-	p.Option = option
 }
 
 func NewPastebin() *Pastebin {
@@ -29,8 +29,8 @@ func NewPastebin() *Pastebin {
 }
 
 // делает пост запрос и возвращает полученную ссылку
-func (p *Pastebin) CreatePaste(text, option string) (string, error) {
-	p.setOption(option)
+func (p *Pastebin) CreatePaste(text string) (string, error) {
+	p.setOption("paste")
 
 	req := p.pastebinrequest(text)
 	resp, err := req.Post("https://pastebin.com/api/api_post.php")
@@ -40,6 +40,10 @@ func (p *Pastebin) CreatePaste(text, option string) (string, error) {
 
 	body := resp.Body()
 	return string(body), nil
+}
+
+func (p *Pastebin) setOption(option string) {
+	p.Option = option
 }
 
 func (p *Pastebin) pastebinrequest(text string) *resty.Request {
