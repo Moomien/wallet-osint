@@ -9,7 +9,8 @@ import (
 
 type Storage interface {
 	Save(addresses []string) error
-	UniqueAddresses(addresses []string) ([]string, error)
+	UniqueAddresses(addresses []string) (addreses []string, err error)
+	Close() error
 }
 
 type Badger struct {
@@ -25,6 +26,10 @@ func NewBadgerDB() (*Badger, error) {
 		return nil, fmt.Errorf("Ошибка создания или открытия бд")
 	}
 	return &Badger{DB: db}, nil
+}
+
+func (db *Badger) Close() error {
+	return db.DB.Close()
 }
 
 // проход в цикле по пачке адресов, добавление в батч и сохранение батча

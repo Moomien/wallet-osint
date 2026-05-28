@@ -18,9 +18,7 @@ import (
 )
 
 // возвращает линки и остатки адресов если есть
-func CollectTwitters(ctx context.Context, db *storage.Badger, addresses []string, flag string) ([]string, []string) {
-	defer db.DB.Close()
-
+func CollectTwitters(ctx context.Context, db storage.Storage, addresses []string, flag string) ([]string, []string) {
 	goLimiter := ratelimiter.NewRateLimiter(20, 5)
 	client := resty.New().SetRateLimiter(goLimiter)
 

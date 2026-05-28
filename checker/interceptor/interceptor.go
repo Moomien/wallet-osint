@@ -5,7 +5,6 @@ import (
 	"arkham_checker/checker/session"
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -14,8 +13,8 @@ import (
 
 const (
 	selectorChatInput  = "div[contenteditable='true']"
-	selectorLimitMsg   = "#last-reply-container >> text=Достигнут лимит сообщений"
 	selectorStopButton = "button[aria-label*='Stop']"
+	LimitMsg           = "Message limit reached"
 )
 
 type Interceptor struct {
@@ -72,11 +71,10 @@ func (i *Interceptor) Capture(ctx context.Context, useragent string) (*CapturedR
 	defer page.Close()
 
 	captured := make(chan *CapturedRequest, 1)
-
 	// перехват запроса
 	page.On("request", func(request playwright.Request) {
-		if strings.Contains(request.URL(), "responses") {
-			slog.Info("Найден нужный запрос", "method", request.Method(), "url", request.URL())
+		if strings.HasSuffix(request.URL(), "/responses") {
+			i.log.Info("Найден нужный запрос", "method", request.Method(), "url", request.URL())
 			body, _ := request.PostData()
 			captured <- &CapturedRequest{
 				Headers: request.Headers(),
@@ -119,15 +117,22 @@ func (i *Interceptor) sendMessage(ctx context.Context, page playwright.Page, msg
 	default:
 	}
 
-	i.log.Info("Нажимаю на поле ввода")
+	i.log.Info("Ожидаю поле ввода")
 	textarea := page.Locator(selectorChatInput).First()
-	if err := textarea.Click(); err != nil {
-		return fmt.Errorf("не удалось кликнуть по полю ввода: %w", err)
+	if err := textarea.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(10000),
+	}); err != nil {
+		return fmt.Errorf("поле ввода не появилось: %w", err)
 	}
 
-	i.log.Info("Заполняю поле ввода", "msg", msg)
-	if err := textarea.Fill(msg); err != nil {
-		return fmt.Errorf("не удалось заполнить сообщение: %w", err)
+	i.log.Info("Фокусируюсь и заполняю сообщение", "msg", msg)
+	if err := textarea.Focus(); err != nil {
+		return fmt.Errorf("не удалось сфокусироваться на поле ввода: %w", err)
+	}
+	// Для contenteditable лучше использовать Type вместо Fill
+	if err := textarea.Type(msg); err != nil {
+		return fmt.Errorf("не удалось ввести сообщение: %w", err)
 	}
 
 	i.log.Info("Нажимаю ENTER")
@@ -135,26 +140,46 @@ func (i *Interceptor) sendMessage(ctx context.Context, page playwright.Page, msg
 		return fmt.Errorf("не удалось нажать Enter: %w", err)
 	}
 
-	// Ожидаем начала и завершения генерации ответа через Locator
 	stopBtn := page.Locator(selectorStopButton)
+	limitMsg := page.GetByText(LimitMsg)
 
-	i.log.Info("Ожидаю начала ответа...")
-	_ = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
+	i.log.Info("Ожидаю начала ответа или сообщения о лимите...")
+	// Ждем либо кнопку остановки (значит ответ пошел), либо сообщение о лимите
+	combined := stopBtn.Or(limitMsg)
+	if err := combined.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
-	})
+		Timeout: playwright.Float(15000),
+	}); err != nil {
+		return fmt.Errorf("grok не начал отвечать после отправки сообщения: %w", err)
+	}
+
+	// Если видим сообщение о лимите - выходим с ошибкой
+	if visible, _ := limitMsg.IsVisible(); visible {
+		i.log.Info("Обнаружен лимит сообщений")
+		return fmt.Errorf("достигнут лимит сообщений: %s", LimitMsg)
+	}
 
 	i.log.Info("Ожидаю завершения генерации ответа...")
-	_ = stopBtn.WaitFor(playwright.LocatorWaitForOptions{
+	if err := stopBtn.WaitFor(playwright.LocatorWaitForOptions{
 		State:   playwright.WaitForSelectorStateHidden,
-		Timeout: playwright.Float(60000),
-	})
+		Timeout: playwright.Float(90000),
+	}); err != nil {
+		return fmt.Errorf("grok не завершил генерацию ответа вовремя: %w", err)
+	}
 
-	i.log.Info("Проверяю наличие лимита")
-	// Проверяем наличие лимита без долгого ожидания.
-	limitLocator := page.Locator(selectorLimitMsg)
-	if visible, _ := limitLocator.IsVisible(); visible {
-		return fmt.Errorf("достигнут лимит сообщений аккаунта")
+	i.log.Info("Ожидаю готовности чата к следующему сообщению")
+	// Дожидаемся, что поле ввода снова готово
+	if err := textarea.WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateVisible,
+		Timeout: playwright.Float(5000),
+	}); err != nil {
+		i.log.Warn("Поле ввода не появилось быстро, продолжаем", "err", err)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(800 * time.Millisecond):
 	}
 
 	return nil

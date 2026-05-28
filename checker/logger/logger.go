@@ -27,6 +27,7 @@ func NewLogger(filename string) (*Logger, error) {
 
 // создает новый логгер
 func newLogger(name string) (*slog.Logger, *os.File, error) {
+
 	dir, err := os.Getwd()
 	if err != nil {
 		return nil, nil, fmt.Errorf("HE удалось получить путь рабочей директории")
@@ -48,6 +49,7 @@ func newLogger(name string) (*slog.Logger, *os.File, error) {
 	}
 
 	multiWriter := io.MultiWriter(os.Stdout, file)
+	//чтобы добавить debug логи нужно прописать
 	logger := slog.New(slog.NewJSONHandler(multiWriter, nil)).With("component", name)
 
 	return logger, file, nil
@@ -63,6 +65,10 @@ func (l *Logger) Warn(msg string, args ...any) {
 }
 func (l *Logger) Error(msg string, args ...any) {
 	l.Log.Error(msg, args...)
+}
+
+func (l *Logger) Debug(msg string, args ...any) {
+	l.Log.Debug(msg, args...)
 }
 
 // закрывает файл лога

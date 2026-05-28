@@ -1,6 +1,7 @@
 package paste
 
 import (
+	"errors"
 	"os"
 
 	"github.com/go-resty/resty/v2"
@@ -14,18 +15,20 @@ type Paste interface {
 
 type Pastebin struct {
 	Client *resty.Client
-	//
-	//то что идет в боди для каждого запроса
 	ApiKey string
 	Option string
 }
 
-func NewPastebin() *Pastebin {
+func NewPastebin() (*Pastebin, error) {
 	client := resty.New()
+	env := os.Getenv("pastebinApikey")
+	if env == "" {
+		return nil, errors.New(".env не считалось, что то случилось.")
+	}
 	return &Pastebin{
 		Client: client,
 		ApiKey: os.Getenv("pastebinApikey"),
-	}
+	}, nil
 }
 
 // делает пост запрос и возвращает полученную ссылку

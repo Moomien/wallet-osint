@@ -54,6 +54,7 @@ func main() {
 		slog.Error("New DB", "Error", err)
 		os.Exit(1)
 	}
+	defer db.Close()
 	//отсев использованных ранее строк
 	uniqaddresses, err := db.UniqueAddresses(addresses)
 	if err != nil {
