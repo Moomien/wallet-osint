@@ -31,7 +31,7 @@ func TestManager(t *testing.T) {
 	wg.Wait()
 
 	t.Log("Горутины успешно выполнены!")
-	cookie, err := sessManager.GetSession()
+	cookie, _, err := sessManager.GetSession()
 	if err != nil {
 		t.Fatal(err)
 	}

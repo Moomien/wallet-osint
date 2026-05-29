@@ -40,6 +40,7 @@ type SessionInfo struct {
 	Valid       bool                        `json:"Valid"`
 	LastChecked time.Time                   `json:"LastChecked"`
 	Checking    bool                        `json:"-"`
+	ResetAt     time.Time                   `json:"ResetAt,omitempty"` // для ротации сессий
 }
 
 type Cookie struct {
@@ -66,8 +67,19 @@ func NewCache(headless bool, domain string) (*CacheSession, error) {
 	}
 
 	data := make(map[string]*SessionInfo)
+	// Сначала пытаемся загрузить существующий кэш
+	if bs, err := os.ReadFile(cachePath); err == nil {
+		_ = json.Unmarshal(bs, &data)
+	}
+
 	for i, accountCookies := range cookies {
 		key := fmt.Sprintf("Account_%d", i+1)
+
+		// Если сессия уже есть в кэше, не перезаписываем её статус
+		if _, exists := data[key]; exists {
+			continue
+		}
+
 		var pwCookies []playwright.OptionalCookie
 		for _, c := range accountCookies {
 			pwCookies = append(pwCookies, playwright.OptionalCookie{
@@ -128,35 +140,73 @@ func NewCache(headless bool, domain string) (*CacheSession, error) {
 }
 
 // GetSession возвращает первую доступную валидную куку из кэша.
-func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, error) {
+func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, string, error) {
 	c.mu.Lock()
 	var targetCookies []playwright.OptionalCookie
+	var targetKey string
 	found := false
 
-	for _, session := range c.data {
+	for key, session := range c.data {
+		if !session.Valid && !session.ResetAt.IsZero() && time.Now().After(session.ResetAt) && !session.Checking {
+			session.Valid = true
+			session.ResetAt = time.Time{}
+			c.log.Info("Лимит аккаунта истек, вовращаем в строй", "account", key)
+		}
+
 		if !session.Valid {
 			continue
 		}
-		session.LastChecked = time.Now()
+
 		targetCookies = session.Cookies
+		targetKey = key
 		found = true
 		break
 	}
 	c.mu.Unlock()
 
 	if !found {
-		return nil, errors.New("валидная сессия не найдена")
+		return nil, "", errors.New("валидная сессия не найдена")
 	}
 
-	go func() {
-		c.mu.RLock()
-		defer c.mu.RUnlock()
-		if err := c.cacheJSON(); err != nil {
-			c.log.Error("Асинхронное обновление кэша провалено", "err", err)
-		}
-	}()
+	return targetCookies, targetKey, nil
+}
 
-	return targetCookies, nil
+// MarkInvalid помечает сессию как невалидную
+// например, при достижении лимита
+func (c *CacheSession) MarkInvalid(key string, waitTime time.Duration) {
+	c.mu.Lock()
+	session, ok := c.data[key]
+	if ok {
+		session.Valid = false
+		session.LastChecked = time.Now()
+		if waitTime > 0 {
+			session.ResetAt = time.Now().Add(waitTime)
+			c.log.Info("Mark: сессия в лимите", "account", key, "reset_at",
+				session.ResetAt.Format("15:04:05"))
+		} else {
+			c.log.Info("Что то не то с лимитом на аккаунте", "account", key)
+			session.ResetAt = time.Now().Add(time.Hour * 24)
+		}
+	}
+	c.mu.Unlock()
+	if ok {
+		if err := c.cacheJSON(); err != nil {
+			c.log.Error("обновление файла cache.json", "err", err)
+		}
+	}
+}
+
+// сохраняет мапу в cache.json
+func (c *CacheSession) cacheJSON() error {
+	c.mu.RLock()
+	prettyJSON, err := json.MarshalIndent(c.data, "", "  ")
+	c.mu.RUnlock()
+
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+
+	return os.WriteFile(c.cachePath, prettyJSON, 0644)
 }
 
 // CheckSession проверяет валидность сессии, выполняя тестовое действие в браузере.
@@ -284,6 +334,7 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 		Timeout: playwright.Float(limitCheckTimeout),
 	})
 
+	c.mu.Lock()
 	if err == nil {
 		c.log.Info("АККАУНТ B ЛИМИТЕ: Найдено сообщение в контейнере ответа!", "session_key", targetKey)
 		session.Valid = false
@@ -292,6 +343,8 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 		session.Valid = true
 	}
 	session.LastChecked = time.Now()
+	c.mu.Unlock()
+
 	//обновление в cache.json
 	if err = c.cacheJSON(); err != nil {
 		c.log.Error("HE получилось обновить данные в cache.json", "err", err)
@@ -324,19 +377,6 @@ func (c *CacheSession) Close() error {
 	}
 
 	return nil
-}
-
-// сохраняет мапу в cache.json
-func (c *CacheSession) cacheJSON() error {
-	c.mu.RLock()
-	prettyJSON, err := json.MarshalIndent(c.data, "", "  ")
-	c.mu.RUnlock()
-
-	if err != nil {
-		return fmt.Errorf("marshal json: %w", err)
-	}
-
-	return os.WriteFile(c.cachePath, prettyJSON, 0644)
 }
 
 // собирает куки из session/cookies и
