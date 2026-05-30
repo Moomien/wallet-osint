@@ -124,7 +124,7 @@ func (x *GrokClient) SendMessage(ctx context.Context, request *interceptor.Captu
 // формирование запроса для последующей отправки
 func (x *GrokClient) grokRequest(request *interceptor.CapturedRequest, userurl string) *resty.Request {
 	msg := request.Body
-	re := regexp.MustCompile(`("message"\s*:\s*")[^"]*("`)
+	re := regexp.MustCompile(`("message"\s*:\s*")[^"]*(")`)
 	res := re.ReplaceAllString(msg, `${1}`+x.setPrompt(userurl)+`${2}`)
 
 	x.log.Info("Заголовки из запроса", "headers", request.Headers)

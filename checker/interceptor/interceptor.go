@@ -14,21 +14,20 @@ import (
 )
 
 const (
-	selectorChatInput  = "div[contenteditable='true']"
-	selectorStopButton = "button[aria-label*='Stop']"
-	LimitMsg           = "limit"
+	LimitMsg   = "limit"
+	maxRetries = 5
 )
 
 type Interceptor struct {
-	log     *log.Logger
 	session *session.CacheSession
+	log     *log.Logger
 }
 
 // CapturedRequest представляет данные, перехваченные из сетевого запроса.
 type CapturedRequest struct {
-	Headers map[string]string
-	Body    string
-	URL     string
+	Headers map[string]string `json:"Headers"`
+	Body    string            `json:"Body"`
+	URL     string            `json:"URL"`
 }
 
 func NewInterceptor(s *session.CacheSession) (*Interceptor, error) {
@@ -49,174 +48,336 @@ func (i *Interceptor) Close() error {
 // Capture запускает экземпляр Playwright, переходит в Grok, отправляет сообщения
 // и перехватывает запрос responses на второе сообщение.
 func (i *Interceptor) Capture(ctx context.Context, useragent string) (*CapturedRequest, error) {
-	for {
+	captured := make(chan *CapturedRequest, 10)
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		// получаем валидную сессию
+		// Очищаем канал перед новой попыткой
+		select {
+		case <-captured:
+			i.log.Warn("Очищен старый запрос из канала перед новой попыткой")
+		default:
+		}
+
+		i.log.Info("Попытка перехвата запроса", "attempt", attempt, "max", maxRetries)
+
+		// Получаем валидную сессию
 		cookie, accountKey, err := i.session.GetSession()
 		if err != nil {
 			return nil, fmt.Errorf("не удалось получить сессию (возможно все в лимите): %w", err)
 		}
 
-		// Оборачиваем одну попытку в функцию, чтобы defer работал корректно на каждой итерации
-		req, err := func() (*CapturedRequest, error) {
-			browserCtx, err := i.session.Browser.NewContext(playwright.BrowserNewContextOptions{
-				UserAgent: playwright.String(useragent),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("не удалось создать контекст браузера: %w", err)
-			}
-			defer browserCtx.Close()
-
-			if err := browserCtx.AddCookies(cookie); err != nil {
-				return nil, fmt.Errorf("не удалось добавить куки: %w", err)
-			}
-			page, err := browserCtx.NewPage()
-			if err != nil {
-				return nil, fmt.Errorf("не удалось создать новую страницу: %w", err)
-			}
-			defer page.Close()
-
-			captured := make(chan *CapturedRequest, 1)
-			// перехват запроса
-			page.On("request", func(request playwright.Request) {
-				if strings.HasSuffix(request.URL(), "/responses") {
-					i.log.Info("Найден нужный запрос", "method", request.Method(), "url", request.URL())
-					body, _ := request.PostData()
-					captured <- &CapturedRequest{
-						Headers: request.Headers(),
-						Body:    body,
-						URL:     request.URL(),
-					}
-				}
-			})
-
-			// переход в чат грока
-			_, err = page.Goto("https://grok.com",
-				playwright.PageGotoOptions{
-					WaitUntil: playwright.WaitUntilStateNetworkidle,
-				})
-			if err != nil {
-				i.log.Error("ошибка перехода на grok.com, пробуем следующий аккаунт", "err", err)
-				return nil, nil
-			}
-
-			msgs := []string{"Hey grok", "LOL"}
-			for _, msg := range msgs {
-				if err := i.sendMessage(ctx, page, msg); err != nil {
-					if strings.Contains(err.Error(), LimitMsg) {
-						waitTime := parseWaitTime(err.Error())
-						i.log.Warn("Обнаружен лимит сообщений, меняем аккаунт", "account", accountKey, "wait", waitTime.String())
-
-						// Лимит пробуем следующий
-						i.session.MarkInvalid(accountKey, waitTime)
-						_ = page.Close()
-						return nil, nil
-					}
-					return nil, fmt.Errorf("не удалось отправить сообщение %q: %w", msg, err)
-				}
-			}
-
-			select {
-			case req := <-captured:
-				return req, nil
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(45 * time.Second):
-				i.log.Warn("таймаут ожидания запроса, пробуем другой аккаунт")
-				return nil, nil
-			}
-		}()
+		req, shouldRetry, err := i.attemptCapture(ctx, useragent, cookie, accountKey, captured)
 		if err != nil {
 			return nil, err
 		}
 		if req != nil {
 			return req, nil
 		}
-		i.log.Info("Попытка завершена, перехожу к следующей итерации цикла...")
+		if !shouldRetry {
+			return nil, fmt.Errorf("не удалось перехватить запрос")
+		}
+
+		i.log.Info("Попытка завершена, перехожу к следующей итерации", "attempt", attempt)
+	}
+
+	return nil, fmt.Errorf("не удалось перехватить запрос после %d попыток", maxRetries)
+}
+
+// attemptCapture выполняет одну попытку перехвата запроса
+// Возвращает: (запрос, нужна_ли_повторная_попытка, ошибка)
+func (i *Interceptor) attemptCapture(
+	ctx context.Context,
+	useragent string,
+	cookie []playwright.OptionalCookie,
+	accountKey string,
+	captured chan *CapturedRequest,
+) (*CapturedRequest, bool, error) {
+	// Создаем дочерний контекст с таймаутом для операций браузера
+	browserOpCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	// Создаем контекст браузера
+	browserCtx, err := i.session.Browser.NewContext(playwright.BrowserNewContextOptions{
+		UserAgent: playwright.String(useragent),
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("не удалось создать контекст браузера: %w", err)
+	}
+	defer browserCtx.Close()
+
+	// Устанавливаем куки
+	if err := browserCtx.AddCookies(cookie); err != nil {
+		return nil, false, fmt.Errorf("не удалось добавить куки: %w", err)
+	}
+
+	// Создаем страницу
+	page, err := browserCtx.NewPage()
+	if err != nil {
+		return nil, false, fmt.Errorf("не удалось создать новую страницу: %w", err)
+	}
+	defer page.Close()
+
+	// Устанавливаем обработчик перехвата запросов
+	i.setupRequestInterceptor(page, cookie, captured)
+
+	// Переходим на grok.com
+	if _, err = page.Goto("https://grok.com", playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+		Timeout:   playwright.Float(30000),
+	}); err != nil {
+		i.log.Error("ошибка перехода на grok.com, пробуем следующий аккаунт", "err", err)
+
+		// Повторяем попытку
+		return nil, true, nil
+	}
+
+	// Проверяем, не попали ли на страницу логина
+	currentURL := page.URL()
+	if strings.Contains(currentURL, "sign-in") || strings.Contains(currentURL, "login") {
+		i.log.Warn("Попали на страницу логина, сессия невалидна", "account", accountKey)
+
+		// Повторяем попытку с другим аккаунтом
+		i.session.MarkInvalid(accountKey, 24*time.Hour)
+		return nil, true, nil
+	}
+
+	i.log.Info("Авторизация через куки прошла успешно")
+
+	// Отправляем первое сообщение и ждем ответа
+	if err := i.sendMessageAndWait(browserOpCtx, page, "Hey grok"); err != nil {
+		if strings.Contains(err.Error(), LimitMsg) {
+			waitTime := parseWaitTime(err.Error())
+			i.log.Warn("Обнаружен лимит сообщений, меняем аккаунт", "account", accountKey, "wait", waitTime.String())
+
+			// Повторяем попытку c другим аккаунтом
+			i.session.MarkInvalid(accountKey, waitTime)
+			return nil, true, nil
+		}
+		return nil, false, fmt.Errorf("не удалось отправить первое сообщение: %w", err)
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Отправляем второе сообщение (не ждем ответа, перехватываем запрос)
+	if err := i.sendMessageSimple(page, "LOL"); err != nil {
+		return nil, false, fmt.Errorf("не удалось отправить второе сообщение: %w", err)
+	}
+
+	i.log.Info("Ожидаем перехват /responses для второго сообщения...")
+
+	// Ждем перехваченный запрос
+	select {
+	case req := <-captured:
+		i.log.Info("Запрос успешно перехвачен", "url", req.URL)
+		return req, false, nil
+	case <-browserOpCtx.Done():
+		return nil, false, browserOpCtx.Err()
+	case <-time.After(30 * time.Second):
+		i.log.Warn("таймаут ожидания запроса, пробуем другой аккаунт")
+		return nil, true, nil
 	}
 }
 
-// playwright отправляет сообщение
-func (i *Interceptor) sendMessage(ctx context.Context, page playwright.Page, msg string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+// setupRequestInterceptor устанавливает обработчик перехвата запросов
+func (i *Interceptor) setupRequestInterceptor(
+	page playwright.Page,
+	cookie []playwright.OptionalCookie,
+	captured chan *CapturedRequest,
+) {
+	page.On("request", func(request playwright.Request) {
+		if !strings.HasSuffix(request.URL(), "/responses") {
+			return
+		}
+
+		i.log.Info("Найден нужный запрос", "method", request.Method(), "url", request.URL())
+
+		// Запускаем обработку в отдельной горутине
+		// чтобы не блокировать Event Loop Playwright!
+		go i.processInterceptedRequest(request, cookie, captured)
+	})
+}
+
+// processInterceptedRequest обрабатывает перехваченный запрос в отдельной горутине
+func (i *Interceptor) processInterceptedRequest(
+	request playwright.Request,
+	cookie []playwright.OptionalCookie,
+	captured chan *CapturedRequest) {
+	body, _ := request.PostData()
+	headers, err := request.AllHeaders()
+	if err != nil {
+		i.log.Warn("не удалось получить все заголовки, используем обычные")
+		headers = request.Headers()
 	}
 
-	i.log.Info("Ожидаю поле ввода")
-	textarea := page.Locator(selectorChatInput).First()
-	if err := textarea.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(10000),
-	}); err != nil {
-		return fmt.Errorf("поле ввода не появилось: %w", err)
+	// Проверяем наличие куки в заголовках
+	cookieHeader := ""
+	if c, ok := headers["cookie"]; ok {
+		cookieHeader = c
 	}
 
-	i.log.Info("Фокусируюсь и заполняю сообщение", "msg", msg)
-	if err := textarea.Focus(); err != nil {
-		return fmt.Errorf("не удалось сфокусироваться на поле ввода: %w", err)
+	// Если куки нет, добавляем из сессии
+	if cookieHeader == "" {
+		var cookieParts []string
+		for _, c := range cookie {
+			cookieParts = append(cookieParts, fmt.Sprintf("%s=%s", c.Name, c.Value))
+		}
+		cookieHeader = strings.Join(cookieParts, ";")
+		headers["cookie"] = cookieHeader
+		i.log.Info("куки добавлены вручную из сессии")
 	}
 
-	if err := textarea.Type(msg); err != nil {
-		return fmt.Errorf("не удалось ввести сообщение: %w", err)
+	req := &CapturedRequest{
+		Headers: headers,
+		Body:    body,
+		URL:     request.URL(),
 	}
 
-	i.log.Info("Нажимаю ENTER")
-	if err := page.Keyboard().Press("Enter"); err != nil {
-		return fmt.Errorf("не удалось нажать Enter: %w", err)
+	// Отправляем в канал (блокирующая операция, но мы в горутине)
+	captured <- req
+	i.log.Info("Запрос успешно отправлен в канал")
+}
+
+// sendMessageAndWait отправляет сообщение и ждет ответа Grok
+func (i *Interceptor) sendMessageAndWait(ctx context.Context, page playwright.Page, msg string) error {
+	// Находим поле ввода
+	textarea := i.findTextarea(page)
+	if textarea == nil {
+		return fmt.Errorf("не удалось найти поле ввода")
 	}
 
-	stopBtn := page.Locator(selectorStopButton)
-	// Ищем плашку лимита по ключевым фразам
-	limitMsg := page.Locator("text=/limit (reached|is gone)/i")
+	// Вводим сообщение
+	if err := textarea.Click(); err != nil {
+		return fmt.Errorf("клик на поле ввода: %w", err)
+	}
+	time.Sleep(400 * time.Millisecond)
 
-	i.log.Info("Ожидаю начала ответа или сообщения о лимите...")
-	// Ждем либо кнопку остановки (значит ответ пошел), либо сообщение о лимите
-	combined := stopBtn.Or(limitMsg)
-	if err := combined.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(15000),
-	}); err != nil {
-		return fmt.Errorf("grok не начал отвечать после отправки сообщения: %w", err)
+	if err := textarea.Fill(msg); err != nil {
+		return fmt.Errorf("ввод сообщения: %w", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	i.log.Info("Отправляю сообщение", "msg", msg)
+
+	// Отправляем сообщение
+	sendBtn := page.Locator("button[aria-label*='send' i]")
+	count, _ := sendBtn.Count()
+	if count > 0 {
+		if err := sendBtn.First().Click(); err != nil {
+			return fmt.Errorf("клик на кнопку отправки: %w", err)
+		}
+	} else {
+		if err := page.Keyboard().Press("Enter"); err != nil {
+			return fmt.Errorf("нажатие Enter: %w", err)
+		}
 	}
 
-	// Если видим сообщение о лимите - выходим с ошибкой
-	if visible, _ := limitMsg.IsVisible(); visible {
-		text, _ := limitMsg.InnerText()
-		i.log.Info("Обнаружен лимит сообщений", "text", text)
-		return fmt.Errorf("достигнут лимит сообщений: %s, %s", LimitMsg, text)
+	// Ждем завершения ответа Grok
+	return i.waitForGrokResponse(ctx, page, msg)
+}
+
+// sendMessageSimple отправляет сообщение без ожидания ответа
+func (i *Interceptor) sendMessageSimple(page playwright.Page, msg string) error {
+	textarea := i.findTextarea(page)
+	if textarea == nil {
+		return fmt.Errorf("не удалось найти поле ввода")
 	}
 
-	i.log.Info("Ожидаю завершения генерации ответа...")
-	if err := stopBtn.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateHidden,
-		Timeout: playwright.Float(90000),
-	}); err != nil {
-		return fmt.Errorf("grok не завершил генерацию ответа вовремя: %w", err)
+	if err := textarea.Click(); err != nil {
+		return fmt.Errorf("клик на поле ввода: %w", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	if err := textarea.Fill(msg); err != nil {
+		return fmt.Errorf("ввод сообщения: %w", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	i.log.Info("Отправляю сообщение", "msg", msg)
+
+	sendBtn := page.Locator("button[aria-label*='send' i]")
+	count, _ := sendBtn.Count()
+	if count > 0 {
+		if err := sendBtn.First().Click(); err != nil {
+			return fmt.Errorf("клик на кнопку отправки: %w", err)
+		}
+	} else {
+		if err := page.Keyboard().Press("Enter"); err != nil {
+			return fmt.Errorf("нажатие Enter: %w", err)
+		}
 	}
 
-	i.log.Info("Ожидаю готовности чата к следующему сообщению")
-	// Дожидаемся, что поле ввода снова готово
-	if err := textarea.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000),
-	}); err != nil {
-		i.log.Warn("Поле ввода не появилось быстро, продолжаем", "err", err)
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// findTextarea находит поле ввода сообщения
+func (i *Interceptor) findTextarea(page playwright.Page) playwright.Locator {
+	selectors := []string{
+		"textarea[placeholder*='message' i]",
+		"textarea[placeholder*='Ask' i]",
+		"textarea[placeholder*='Grok' i]",
+		"div[contenteditable='true']",
+		"textarea",
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(800 * time.Millisecond):
+	for _, sel := range selectors {
+		loc := page.Locator(sel)
+		count, err := loc.Count()
+		if err == nil && count > 0 {
+			return loc.First()
+		}
 	}
 
 	return nil
+}
+
+// waitForGrokResponse ждет завершения ответа Grok
+func (i *Interceptor) waitForGrokResponse(ctx context.Context, page playwright.Page, label string) error {
+	i.log.Info("Ожидаю завершения ответа Grok", "label", label)
+
+	// Небольшая пауза для начала генерации
+	time.Sleep(3 * time.Second)
+
+	// Проверяем наличие кнопки Stop (Grok генерирует ответ)
+	stopSelectors := []string{
+		"button[aria-label*='stop' i]",
+		"button[aria-label*='Stop' i]",
+		"button:has-text('Stop')",
+		"[data-testid*='stop']",
+	}
+
+	// Ждем завершения генерации (исчезновения кнопки Stop)
+	for j := 0; j < 120; j++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		generating := false
+		for _, sel := range stopSelectors {
+			count, err := page.Locator(sel).Count()
+			if err == nil && count > 0 {
+				generating = true
+				break
+			}
+		}
+
+		if !generating {
+			i.log.Info("Grok закончил генерацию ответа", "label", label)
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("таймаут ожидания ответа Grok")
 }
 
 func parseWaitTime(errMsg string) time.Duration {

@@ -15,7 +15,7 @@ func TestInterceptor(t *testing.T) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	s, err := session.NewCache(true, "grok.com")
+	s, err := session.NewCache(false, "grok.com")
 	if err != nil {
 		t.Fatalf("создание нового кэша: %v", err)
 	}
