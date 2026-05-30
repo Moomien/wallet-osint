@@ -25,9 +25,9 @@ type Interceptor struct {
 
 // CapturedRequest представляет данные, перехваченные из сетевого запроса.
 type CapturedRequest struct {
-	Headers map[string]string `json:"Headers"`
-	Body    string            `json:"Body"`
-	URL     string            `json:"URL"`
+	Headers map[string]string
+	Body    string
+	URL     string
 }
 
 func NewInterceptor(s *session.CacheSession) (*Interceptor, error) {
