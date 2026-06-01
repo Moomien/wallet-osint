@@ -20,3 +20,5 @@ logs
 checker/interceptor/session/cache.json
 checker/interceptor/session/cookies/*
 !checker/interceptor/session/cookies/.gitkeep
+.VSCodeCounter
+checker/grokclient/config.json

@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	LimitMsg   = "limit"
-	maxRetries = 5
+	LimitMsg      = "limit"
+	HighDemandMsg = "high demand"
+	maxRetries    = 5
 )
 
 type Interceptor struct {
@@ -25,9 +26,9 @@ type Interceptor struct {
 
 // CapturedRequest представляет данные, перехваченные из сетевого запроса.
 type CapturedRequest struct {
-	Headers map[string]string
-	Body    string
-	URL     string
+	Headers map[string]string `json:"Headers"`
+	Body    string            `json:"Body"`
+	URL     string            `json:"URL"`
 }
 
 func NewInterceptor(s *session.CacheSession) (*Interceptor, error) {
@@ -151,7 +152,7 @@ func (i *Interceptor) attemptCapture(
 
 	// Отправляем первое сообщение и ждем ответа
 	if err := i.sendMessageAndWait(browserOpCtx, page, "Hey grok"); err != nil {
-		if strings.Contains(err.Error(), LimitMsg) {
+		if strings.Contains(err.Error(), LimitMsg) || strings.Contains(err.Error(), HighDemandMsg) {
 			waitTime := parseWaitTime(err.Error())
 			i.log.Warn("Обнаружен лимит сообщений, меняем аккаунт", "account", accountKey, "wait", waitTime.String())
 
@@ -209,11 +210,7 @@ func (i *Interceptor) processInterceptedRequest(
 	cookie []playwright.OptionalCookie,
 	captured chan *CapturedRequest) {
 	body, _ := request.PostData()
-	headers, err := request.AllHeaders()
-	if err != nil {
-		i.log.Warn("не удалось получить все заголовки, используем обычные")
-		headers = request.Headers()
-	}
+	headers := request.Headers()
 
 	// Проверяем наличие куки в заголовках
 	cookieHeader := ""
@@ -407,4 +404,9 @@ func parseWaitTime(errMsg string) time.Duration {
 		return 24 * time.Hour
 	}
 	return totalDuration
+}
+
+// количество сессий
+func (i *Interceptor) Length() int {
+	return i.Length()
 }

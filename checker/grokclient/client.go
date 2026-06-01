@@ -1,54 +1,44 @@
 package grokclient
 
 import (
-	paste "arkham_checker/checker/grokclient/paste_service"
-	"arkham_checker/checker/interceptor"
 	log "arkham_checker/checker/logger"
-	"encoding/json"
-	"strings"
+	"errors"
 
 	"context"
 	_ "embed"
 	"fmt"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/tidwall/gjson"
 )
 
-// промпт для отправки нейронке
-//
-//go:embed prompt.txt
-var prompt string
-
 type GrokError struct {
-	StatusCode int
-	Message    string
-	RetryAfter time.Duration
+	StatusCode    int
+	Message       string
+	RetryAfter    time.Duration
+	SessionExpire bool
 }
 
 func (e *GrokError) Error() string {
-	msg := fmt.Sprintf("grok: API error. StatusCode: %v, Message: %v", e.StatusCode, e.Message)
 	if e.RetryAfter > 0 {
-		return fmt.Sprintf("grok: API error. StatusCode: %v, Message: %v, Retry After: %v", e.StatusCode, e.Message, e.RetryAfter)
+		return fmt.Sprintf("grok: API ошибка. StatusCode: %v, Message: %v, Retry After: %v", e.StatusCode, e.Message, e.RetryAfter)
 	}
-	return msg
+	if e.SessionExpire {
+		return fmt.Sprintf("Сессия протухла (статус %d)", e.StatusCode)
+	}
+
+	return fmt.Sprintf("grok: API ошибка. StatusCode: %v, Message: %v", e.StatusCode, e.Message)
 }
 
 type GrokClient struct {
-	Paste  paste.Paste
-	client *resty.Client
-	prompt string
-	log    *log.Logger
+	client    *resty.Client
+	useragent string
+	prompt    string
+	log       *log.Logger
 }
 
-func NewGrokClient() (*GrokClient, error) {
-	p, err := paste.NewPastebin()
-	if err != nil {
-		return nil, fmt.Errorf("создание инстанса пастебина: %w", err)
-	}
+func NewGrokClient(prompt, useragent string) (*GrokClient, error) {
 	c := resty.New()
 
 	logger, err := log.NewLogger("grokclient")
@@ -57,31 +47,53 @@ func NewGrokClient() (*GrokClient, error) {
 	}
 
 	gc := &GrokClient{
-		Paste:  p,
-		client: c,
-		prompt: prompt,
-		log:    logger,
+		client:    c,
+		useragent: useragent,
+		prompt:    prompt,
+		log:       logger,
 	}
 
 	return gc, nil
 }
 
-// отправляет текст в грок и сохраняет в сервис паст и выдаёт URL на пасту
-func (x *GrokClient) SendMessage(ctx context.Context, request *interceptor.CapturedRequest, userurl string) (string, error) {
+func (x *GrokClient) Close() error {
+	return x.log.Close()
+}
+
+// отправляет текст в грок и получает готовую строку - ответ
+// provider - наш конфиг
+// attempt должен быть 0
+func (x *GrokClient) SendMessage(ctx context.Context, provider RequestProvider, username string, attempt int) (string, error) {
+	if attempt > provider.length() {
+		return "", errors.New("Попробовали все способы, все куки, ничего не сработало")
+	}
+
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	default:
 	}
+	//будем пробовать по дефолту static, в случае протухания сессии переключимся на interceptor
+	request, err := provider.get(ctx, x.useragent)
+	if err != nil {
+		return "", err
+	}
+	body, err := provider.buildbody(request, username, x.prompt)
+	if err != nil {
+		return "", err
+	}
+
 	//отправка запроса и получение ответа
-	resp, err := x.grokRequest(request, userurl).Post(request.URL)
+	resp, err := x.client.NewRequest().SetHeaders(request.Headers).SetBody(body).Post(request.URL)
 	if err != nil {
 		return "", err
 	}
 	fmt.Println(resp.String())
+
 	//обработка самых частых ошибок
-	if resp.StatusCode() == 429 || resp.StatusCode() == 401 {
-		x.log.Info("апи грока. статус код: %v", resp.StatusCode())
+	if resp.StatusCode() == 429 || resp.StatusCode() == 401 || resp.StatusCode() == 403 {
+		x.log.Info("апи грока. статус код: %d", resp.StatusCode())
+		//если 401 то точно протухла
 		gErr := &GrokError{
 			StatusCode: resp.StatusCode(),
 			Message:    resp.String(),
@@ -93,50 +105,33 @@ func (x *GrokClient) SendMessage(ctx context.Context, request *interceptor.Captu
 				if err != nil {
 					return "", gErr
 				}
+				x.log.Warn("ушли в ретрай", "retry-after", time.Duration(seconds)*time.Second)
 				gErr.RetryAfter = time.Duration(seconds) * time.Second
+				gErr.SessionExpire = false
 			}
+		}
+
+		if resp.StatusCode() == 401 || resp.StatusCode() == 403 {
+			gErr.SessionExpire = true
+			x.log.Warn("Сессия протухла, пробую перехватчик.....")
+			//выставляем другой мод
+			provider.setMode("interceptor")
+			return x.SendMessage(ctx, provider, username, attempt+1)
 		}
 
 		return "", gErr
 	}
-	//успех
-	var pasteURL string
+
+	//Успех
+	var text string
 	if resp.StatusCode() == 200 {
-		x.log.Info("Клиент успешно отправил запрос")
-		res := gjson.Get(resp.String(), "result.modelResponse.message")
-		if !res.Exists() {
-			gErr := &GrokError{
-				StatusCode: 200,
-				Message:    "Код 200 но нейронка не ответила(?)",
-				RetryAfter: 0,
-			}
-			return "", gErr
-		}
-		pasteURL, err = x.Paste.CreatePaste(res.String())
+		x.log.Info("Клиент успешно отправил запрос, ответ : 200")
+		//обрабатываем ответ
+		text, err = provider.parseResponse(resp.String())
 		if err != nil {
-			return "", fmt.Errorf("сохранение текста нейронки в сервис паст: %w", err)
+			return "", err
 		}
 	}
 
-	return pasteURL, nil
-}
-
-// формирование запроса для последующей отправки
-func (x *GrokClient) grokRequest(request *interceptor.CapturedRequest, userurl string) *resty.Request {
-	msg := request.Body
-	re := regexp.MustCompile(`("message"\s*:\s*")[^"]*(")`)
-	res := re.ReplaceAllString(msg, `${1}`+x.setPrompt(userurl)+`${2}`)
-
-	x.log.Info("Заголовки из запроса", "headers", request.Headers)
-	delete(request.Headers, "Content-Length")
-
-	return x.client.NewRequest().SetHeaders(request.Headers).SetBody(res)
-}
-
-// берет юзернейм и подставляет его в промпт
-func (x *GrokClient) setPrompt(userurl string) string {
-	clean := strings.ReplaceAll(x.prompt, "\r", "")
-	msg := fmt.Sprintf(clean, userurl, userurl)
-	jsonBytes, _ := json.Marshal(msg)
-	return string(jsonBytes[1 : len(jsonBytes)-1])
+	return text, nil
 }

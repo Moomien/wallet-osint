@@ -424,3 +424,8 @@ func cookieS(log *slog.Logger, cachePath string) ([][]Cookie, error) {
 	}
 	return allCookies, nil
 }
+
+// количество сессий
+func (c *CacheSession) Length() int {
+	return len(c.data)
+}

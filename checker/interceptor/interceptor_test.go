@@ -33,4 +33,5 @@ func TestInterceptor(t *testing.T) {
 	}
 	t.Log("Headers:", req.Headers)
 	t.Log("Body:", req.Body)
+	t.Log("URL:", req.URL)
 }

@@ -14,7 +14,6 @@ func TestCreatePaste(t *testing.T) {
 	if err != nil {
 		t.Log(err)
 	}
-	t.Logf("api_dev_key вот такой: %v", pastebin.ApiKey)
 	sometxt := "sometxttxtxtxtxttxtxt"
 	str, err := pastebin.CreatePaste(sometxt)
 	if err != nil {
