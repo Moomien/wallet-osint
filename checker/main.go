@@ -55,6 +55,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+
 	//отсев использованных ранее строк
 	uniqaddresses, err := db.UniqueAddresses(addresses)
 	if err != nil {
@@ -70,7 +71,7 @@ func main() {
 	//collect
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
+	//go run main.go proxy
 	proxyflag := os.Args[1]
 	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses, proxyflag)
 

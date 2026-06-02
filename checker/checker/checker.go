@@ -147,24 +147,6 @@ func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address st
 	return "Failed to fetch"
 }
 
-func getProxy() (func() string, error) {
-	file, err := os.ReadFile("proxy.txt")
-	if err != nil {
-		return nil, err
-	}
-	str := strings.Split(string(file), "\r\n")
-	lastProxy := str[rand.Intn(len(str))]
-
-	return func() string {
-		newProxy := str[rand.Intn(len(str))]
-		for newProxy == lastProxy {
-			newProxy = str[rand.Intn(len(str))]
-		}
-		lastProxy = newProxy
-		return newProxy
-	}, nil
-}
-
 func newArkhamRequest(client *resty.Client, flag string) *resty.Request {
 	cookie := os.Getenv("cookie")
 	if flag == "proxy" {
@@ -184,6 +166,24 @@ func newArkhamRequest(client *resty.Client, flag string) *resty.Request {
 		SetHeader("pragma", "no-cache").SetHeader("priority", "u=1, i").SetHeader("Referer", "https://intel.arkm.com/").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36").
 		SetHeader("Cookie", cookie)
+}
+
+func getProxy() (func() string, error) {
+	file, err := os.ReadFile("proxy.txt")
+	if err != nil {
+		return nil, err
+	}
+	str := strings.Split(string(file), "\r\n")
+	lastProxy := str[rand.Intn(len(str))]
+
+	return func() string {
+		newProxy := str[rand.Intn(len(str))]
+		for newProxy == lastProxy {
+			newProxy = str[rand.Intn(len(str))]
+		}
+		lastProxy = newProxy
+		return newProxy
+	}, nil
 }
 
 func arkhamURL(address string) string {

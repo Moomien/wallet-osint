@@ -108,9 +108,16 @@ func (config *GrokConfig) buildbody(request *interceptor.CapturedRequest, userna
 	}
 
 	if mode == "static" {
-		return sjson.Set(request.Body, "input.0.content.0.text", formatPrompt(username, prompt))
+		body := request.Body
+		// Добавляем prompt_cache_key для кэширования промпта
+		body, _ = sjson.Set(body, "prompt_cache_key", sessionName)
+
+		body, _ = sjson.Set(body, "input.0.content.0.text", formatPrompt(username, prompt))
+
+		return body, nil
 	}
 
+	// Для interceptor mode - кэширование не поддерживается
 	re := regexp.MustCompile(`("message"\s*:\s*")[^"]*(")`)
 	result := re.ReplaceAllString(request.Body, `${1}`+formatPrompt(username, prompt)+`${2}`)
 	return result, nil
@@ -173,7 +180,6 @@ func (config *GrokConfig) GetSessionNames() []string {
 	return names
 }
 
-// Close закрывает логгер
 func (config *GrokConfig) Close() error {
 	if config.log != nil {
 		return config.log.Close()
@@ -184,7 +190,7 @@ func (config *GrokConfig) Close() error {
 // берет юзернейм и подставляет его в промпт
 func formatPrompt(username, prompt string) string {
 	clean := strings.ReplaceAll(prompt, "\r", "")
-	msg := fmt.Sprintf(clean, username, username)
+	msg := strings.ReplaceAll(clean, "{{USERNAME}}", "@"+username)
 	jsonBytes, _ := json.Marshal(msg)
 	return string(jsonBytes[1 : len(jsonBytes)-1])
 }

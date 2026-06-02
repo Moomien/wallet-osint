@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // SessionPool управляет пулом сессий для параллельной работы
 type SessionPool struct {
-	config        *GrokConfig
-	sessions      []string // список всех сессий
-	mu            sync.RWMutex
-	activeWorkers atomic.Int32
-	log           *log.Logger
+	config   *GrokConfig
+	sessions []string
+	log      *log.Logger
 }
 
 // NewSessionPool создаёт новый пул сессий
@@ -32,61 +31,106 @@ func NewSessionPool(config *GrokConfig) *SessionPool {
 	}
 }
 
-// WorkerFunc - функция которую выполняет воркер
-// Принимает контекст, клиент, имя сессии и общую очередь задач
-type WorkerFunc func(ctx context.Context, client *GrokClient, sessionName string, taskQueue <-chan string) error
-
-// RunWorkers запускает N горутин (по одной на каждую сессию)
-// Каждая горутина берёт задачи из общей очереди taskQueue
-func (sp *SessionPool) RunWorkers(ctx context.Context, taskQueue <-chan string,
-	workerFunc WorkerFunc, prompt string, useragent string) error {
+// RunThrottledWorkers запускает воркеры для обработки пользователей
+// с ограничением частоты запросов (1 RPS) на уровне сессий.
+// Поддерживает автоматический повтор запросов при ошибке 429.
+func (sp *SessionPool) RunWorkers(
+	ctx context.Context,
+	users []string,
+	onResult func(username, result string, err error),
+	prompt string,
+	useragent string,
+) error {
 	if len(sp.sessions) == 0 {
 		return fmt.Errorf("нет доступных сессий")
 	}
+	if len(users) == 0 {
+		return fmt.Errorf("нет пользователей для обработки")
+	}
+
+	// Создаём по одному клиенту на каждую сессию
+	// Каждый клиент имеет rate limiter 1 RPS внутри resty
+	clients := make(map[string]*GrokClient)
+	for _, sessionName := range sp.sessions {
+		client, err := NewGrokClient(prompt, useragent)
+		if err != nil {
+			return fmt.Errorf("создание клиента для сессии %s: %w", sessionName, err)
+		}
+		client.SetSession(sessionName)
+		clients[sessionName] = client
+	}
+
+	defer func() {
+		for _, client := range clients {
+			client.Close()
+		}
+	}()
 
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(sp.sessions))
+	var sessionIndex atomic.Uint32
 
-	sp.activeWorkers.Store(int32(len(sp.sessions)))
-
-	// Запускаем по одному воркеру на каждую сессию
-	for _, sessionName := range sp.sessions {
+	for _, username := range users {
 		wg.Add(1)
-		go func(session string) {
+		go func(user string) {
 			defer wg.Done()
-			defer sp.activeWorkers.Add(-1)
-
-			// Создаём отдельный клиент для каждой горутины
-			client, err := NewGrokClient(prompt, useragent)
-			if err != nil {
-				errChan <- fmt.Errorf("создание клиента для сессии %s: %w", session, err)
+			select {
+			case <-ctx.Done():
+				sp.log.Info("[@%s] Остановлена по контексту", user)
 				return
+			default:
 			}
-			defer client.Close()
 
-			// Устанавливаем сессию
-			client.SetSession(session)
+			// Выбираем сессию (round-robin)
+			idx := sessionIndex.Add(1) % uint32(len(sp.sessions))
+			sessionName := sp.sessions[idx]
 
-			// Выполняем функцию воркера
-			if err := workerFunc(ctx, client, session, taskQueue); err != nil {
-				errChan <- fmt.Errorf("воркер %s: %w", session, err)
+			// Берём существующий клиент для этой сессии
+			client := clients[sessionName]
+
+			sp.log.Info("[@%s] Использую сессию %s", user, sessionName)
+
+			// Пытаемся отправить с retry для 429
+			maxRetries := 3
+			var response string
+			var lastErr error
+
+			for attempt := 0; attempt < maxRetries; attempt++ {
+				response, lastErr = client.SendMessage(ctx, sp.config, user, 0)
+
+				if lastErr == nil {
+					// Успех
+					break
+				}
+
+				if grokErr, ok := lastErr.(*GrokError); ok && grokErr.StatusCode == 429 {
+					retryAfter := grokErr.RetryAfter
+					if retryAfter == 0 {
+						retryAfter = 5 * time.Second
+					}
+					sp.log.Warn("[@%s] 429 (попытка %d/%d), ждём %v", user, attempt+1, maxRetries, retryAfter)
+
+					select {
+					case <-time.After(retryAfter):
+						continue
+					case <-ctx.Done():
+						sp.log.Info("[@%s] Остановлена по контексту во время retry", user)
+						return
+					}
+				}
+				break
 			}
-		}(sessionName)
+
+			if lastErr != nil {
+				sp.log.Error("[@%s] Не удалось обработать после %d попыток: %v", user, maxRetries, lastErr)
+				onResult(user, "", lastErr)
+			} else {
+				sp.log.Info("[@%s] Успешно обработан", user)
+				onResult(user, response, nil)
+			}
+		}(username)
 	}
 
-	// Ждём завершения всех воркеров
 	wg.Wait()
-	close(errChan)
-
-	// Собираем ошибки
-	var errors []error
-	for err := range errChan {
-		errors = append(errors, err)
-	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("ошибки воркеров: %v", errors)
-	}
-
+	sp.log.Info("Все горутины завершены")
 	return nil
 }
