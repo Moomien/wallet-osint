@@ -10,6 +10,7 @@ type RateLimiter struct {
 	limiter *rate.Limiter
 }
 
+// r - рпс, b - burst
 func NewRateLimiter(r, b int) *RateLimiter {
 	return &RateLimiter{limiter: rate.NewLimiter(rate.Limit(r), b)}
 }

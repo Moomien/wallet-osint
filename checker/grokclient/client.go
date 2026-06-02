@@ -2,7 +2,9 @@ package grokclient
 
 import (
 	log "arkham_checker/checker/logger"
+	"arkham_checker/checker/ratelimiter"
 	"errors"
+	"sync"
 
 	"context"
 	_ "embed"
@@ -32,25 +34,32 @@ func (e *GrokError) Error() string {
 }
 
 type GrokClient struct {
-	client    *resty.Client
-	useragent string
-	prompt    string
-	log       *log.Logger
+	client         *resty.Client
+	useragent      string
+	prompt         string
+	currentSession string
+	mu             sync.Mutex
+	rateLimiter    *ratelimiter.RateLimiter
+	log            *log.Logger
 }
 
 func NewGrokClient(prompt, useragent string) (*GrokClient, error) {
-	c := resty.New()
-
 	logger, err := log.NewLogger("grokclient")
 	if err != nil {
 		return nil, fmt.Errorf("создание логгера grokclient: %w", err)
 	}
 
+	limiter := ratelimiter.NewRateLimiter(1, 1)
+	c := resty.New()
+	c.SetRateLimiter(limiter)
+
 	gc := &GrokClient{
-		client:    c,
-		useragent: useragent,
-		prompt:    prompt,
-		log:       logger,
+		client:         c,
+		useragent:      useragent,
+		prompt:         prompt,
+		currentSession: "default",
+		rateLimiter:    limiter,
+		log:            logger,
 	}
 
 	return gc, nil
@@ -58,6 +67,20 @@ func NewGrokClient(prompt, useragent string) (*GrokClient, error) {
 
 func (x *GrokClient) Close() error {
 	return x.log.Close()
+}
+
+// SetSession устанавливает активную сессию (потокобезопасно)
+func (x *GrokClient) SetSession(sessionName string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.currentSession = sessionName
+}
+
+// GetSession возвращает имя текущей сессии (потокобезопасно)
+func (x *GrokClient) GetSession() string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.currentSession
 }
 
 // отправляет текст в грок и получает готовую строку - ответ
@@ -73,12 +96,19 @@ func (x *GrokClient) SendMessage(ctx context.Context, provider RequestProvider, 
 		return "", ctx.Err()
 	default:
 	}
+
+	x.mu.Lock()
+	sessionName := x.currentSession
+	x.mu.Unlock()
+
+	x.log.Info(fmt.Sprintf("Используем сессию: %s", sessionName))
+
 	//будем пробовать по дефолту static, в случае протухания сессии переключимся на interceptor
-	request, err := provider.get(ctx, x.useragent)
+	request, err := provider.get(ctx, x.useragent, sessionName)
 	if err != nil {
 		return "", err
 	}
-	body, err := provider.buildbody(request, username, x.prompt)
+	body, err := provider.buildbody(request, username, x.prompt, sessionName)
 	if err != nil {
 		return "", err
 	}
@@ -88,11 +118,10 @@ func (x *GrokClient) SendMessage(ctx context.Context, provider RequestProvider, 
 	if err != nil {
 		return "", err
 	}
-	fmt.Println(resp.String())
 
 	//обработка самых частых ошибок
 	if resp.StatusCode() == 429 || resp.StatusCode() == 401 || resp.StatusCode() == 403 {
-		x.log.Info("апи грока. статус код: %d", resp.StatusCode())
+		x.log.Info("апи грока. статус код: ", resp.StatusCode())
 		//если 401 то точно протухла
 		gErr := &GrokError{
 			StatusCode: resp.StatusCode(),
@@ -113,10 +142,25 @@ func (x *GrokClient) SendMessage(ctx context.Context, provider RequestProvider, 
 
 		if resp.StatusCode() == 401 || resp.StatusCode() == 403 {
 			gErr.SessionExpire = true
-			x.log.Warn("Сессия протухла, пробую перехватчик.....")
-			//выставляем другой мод
-			provider.setMode("interceptor")
-			return x.SendMessage(ctx, provider, username, attempt+1)
+			x.log.Warn("Сессия '%s' протухла, пробую переключиться на другую сессию...", sessionName)
+
+			// Пытаемся переключиться на другую доступную сессию
+			sessions := provider.GetSessionNames()
+			for _, name := range sessions {
+				if name != sessionName {
+					x.log.Info(fmt.Sprintf("Переключаюсь на сессию: %s", name))
+					x.SetSession(name)
+					return x.SendMessage(ctx, provider, username, attempt+1)
+				}
+			}
+
+			// Если других сессий нет, пробуем переключить текущую на interceptor
+			if err := provider.setMode(sessionName, "interceptor"); err == nil {
+				x.log.Info(fmt.Sprintf("Переключил сессию '%s' на режим interceptor", sessionName))
+				return x.SendMessage(ctx, provider, username, attempt+1)
+			}
+
+			return "", gErr
 		}
 
 		return "", gErr
@@ -127,7 +171,7 @@ func (x *GrokClient) SendMessage(ctx context.Context, provider RequestProvider, 
 	if resp.StatusCode() == 200 {
 		x.log.Info("Клиент успешно отправил запрос, ответ : 200")
 		//обрабатываем ответ
-		text, err = provider.parseResponse(resp.String())
+		text, err = provider.parseResponse(resp.String(), sessionName)
 		if err != nil {
 			return "", err
 		}

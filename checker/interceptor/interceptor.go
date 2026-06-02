@@ -406,7 +406,7 @@ func parseWaitTime(errMsg string) time.Duration {
 	return totalDuration
 }
 
-// количество сессий
+// количество сессий в кэше
 func (i *Interceptor) Length() int {
-	return i.Length()
+	return i.session.Length()
 }
