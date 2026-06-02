@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 func loadTwitterUsers(filepath string) ([]string, error) {
@@ -37,6 +39,9 @@ func loadTwitterUsers(filepath string) ([]string, error) {
 }
 
 func TestProcessTwitterUsers(t *testing.T) {
+	if err := godotenv.Load(); err != nil {
+		t.Fatalf("загрузка env: %v", err)
+	}
 	cache, err := session.NewCache(true, "grok.com")
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +92,10 @@ func TestProcessTwitterUsers(t *testing.T) {
 	var resultsMu sync.Mutex
 	results := make([]string, 0, len(users))
 
+	// Счётчик потерянных юзеров
+	var lostUsers []string
+	var lostMu sync.Mutex
+
 	// 8. Запускаем параллельные воркеры
 	startTime := time.Now()
 
@@ -102,10 +111,48 @@ func TestProcessTwitterUsers(t *testing.T) {
 			default:
 			}
 
-			// Отправляем запрос (rate limiter работает автоматически в resty)
-			response, err := client.SendMessage(ctx, config, username, 0)
-			if err != nil {
-				log.Printf("[%s] Ошибка для @%s: %v", sessionName, username, err)
+			// Пытаемся обработать с retry
+			maxRetries := 3
+			var response string
+			var lastErr error
+
+			for attempt := 0; attempt < maxRetries; attempt++ {
+				response, lastErr = client.SendMessage(ctx, config, username, 0)
+
+				if lastErr == nil {
+					// Успех!
+					break
+				}
+
+				// Проверяем, это 429 ошибка?
+				if grokErr, ok := lastErr.(*GrokError); ok && grokErr.StatusCode == 429 {
+					retryAfter := grokErr.RetryAfter
+					if retryAfter == 0 {
+						retryAfter = 5 * time.Second
+					}
+
+					log.Printf("[%s] 429 для @%s (попытка %d/%d), ждём %v",
+						sessionName, username, attempt+1, maxRetries, retryAfter)
+
+					// Ждём и пробуем снова
+					select {
+					case <-time.After(retryAfter):
+						continue
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+
+				// Для других ошибок - не retry
+				break
+			}
+
+			if lastErr != nil {
+				log.Printf("[%s] Не удалось обработать @%s после %d попыток: %v",
+					sessionName, username, maxRetries, lastErr)
+				lostMu.Lock()
+				lostUsers = append(lostUsers, username)
+				lostMu.Unlock()
 				continue
 			}
 
@@ -128,7 +175,10 @@ func TestProcessTwitterUsers(t *testing.T) {
 	// 9. Выводим статистику
 	duration := time.Since(startTime)
 	fmt.Printf("\n=== Статистика ===\n")
-	fmt.Printf("Обработано юзеров: %d\n", len(results))
+	fmt.Printf("Обработано юзеров: %d/%d\n", len(results), len(users))
+	if len(lostUsers) > 0 {
+		fmt.Printf("Потерянные юзеры: %d (%v)\n", len(lostUsers), lostUsers)
+	}
 	fmt.Printf("Время выполнения: %s\n", duration)
 	fmt.Printf("Скорость: %.2f юзеров/сек\n", float64(len(results))/duration.Seconds())
 

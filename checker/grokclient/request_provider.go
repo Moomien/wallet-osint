@@ -100,13 +100,14 @@ func (config *GrokConfig) setMode(sessionName string, mode string) error {
 func (config *GrokConfig) buildbody(request *interceptor.CapturedRequest, username string, prompt string, sessionName string) (string, error) {
 	config.mu.RLock()
 	session, ok := config.Sessions[sessionName]
+	mode := session.Mode
 	config.mu.RUnlock()
 
 	if !ok {
 		return "", fmt.Errorf("сессия '%s' не найдена", sessionName)
 	}
 
-	if session.Mode == "static" {
+	if mode == "static" {
 		return sjson.Set(request.Body, "input.0.content.0.text", formatPrompt(username, prompt))
 	}
 
