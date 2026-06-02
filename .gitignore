@@ -24,3 +24,5 @@ checker/interceptor/session/cookies/*
 checker/grokclient/config.json
 checker/grokclient/sessions/*
 !checker/grokclient/sessions/.gitkeep
+checker/gsheets/credentials.json
+checker/gsheets/token.json

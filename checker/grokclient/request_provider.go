@@ -164,7 +164,6 @@ func (config *GrokConfig) length() int {
 	if config.interceptor != nil {
 		return config.interceptor.Length()
 	}
-	// Для static режима - количество сессий
 	return len(config.Sessions)
 }
 
