@@ -46,7 +46,7 @@ def extract_addresses(input_file: str, output_file: str = 'ethereum_addresses.tx
             for address in unique_addresses:
                 f.write(address + '\n')
         
-        print(f'✓ Адреса успешно сохранены в файл: {output_file}')
+        print(f'Адреса успешно сохранены в файл: {output_file}')
         
         # Выводим статистику
         if 'result' in data and 'rows' in data['result']:
@@ -58,13 +58,13 @@ def extract_addresses(input_file: str, output_file: str = 'ethereum_addresses.tx
         return unique_addresses
         
     except FileNotFoundError:
-        print(f'✗ Ошибка: Файл {input_file} не найден!')
+        print(f'Ошибка: Файл {input_file} не найден!')
         sys.exit(1)
     except json.JSONDecodeError as e:
-        print(f'✗ Ошибка парсинга JSON: {e}')
+        print(f'Ошибка парсинга JSON: {e}')
         sys.exit(1)
     except Exception as e:
-        print(f'✗ Неожиданная ошибка: {e}')
+        print(f'Неожиданная ошибка: {e}')
         sys.exit(1)
 
 
@@ -75,7 +75,7 @@ def main():
     
     # Проверяем существование входного файла
     if not Path(input_file).exists():
-        print(f'✗ Файл {input_file} не найден в текущей директории!')
+        print(f'Файл {input_file} не найден в текущей директории!')
         print(f'Текущая директория: {Path.cwd()}')
         sys.exit(1)
     
