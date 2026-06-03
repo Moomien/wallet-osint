@@ -118,7 +118,7 @@ func TestProcessTwitterUsers(t *testing.T) {
 	fmt.Printf("Скорость: %.2f юзеров/сек\n", float64(len(results))/duration.Seconds())
 
 	if len(results) > 0 {
-		pasteService, err := paste.NewGitGist()
+		pasteService, err := paste.NewNotionClient()
 		if err != nil {
 			log.Printf("Ошибка создания pastebin сервиса: %v", err)
 			return
@@ -132,7 +132,7 @@ func TestProcessTwitterUsers(t *testing.T) {
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
-				if _, err := pasteService.CreatePaste(r, urls); err != nil {
+				if err := pasteService.CreatePaste(r, urls); err != nil {
 					log.Print(err)
 				}
 			}(result)

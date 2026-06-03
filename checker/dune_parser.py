@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для извлечения Ethereum адресов из файла dune_analytics.txt
+Скрипт для извлечения адресов из файла dune_analytics.txt
 """
 
 import json
@@ -10,7 +10,7 @@ from pathlib import Path
 
 def extract_addresses(input_file: str, output_file: str = 'ethereum_addresses.txt'):
     """
-    Извлекает Ethereum адреса из JSON файла Dune Analytics
+    Извлекает адреса из JSON файла Dune Analytics
     
     Args:
         input_file: Путь к входному файлу с JSON данными

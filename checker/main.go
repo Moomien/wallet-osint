@@ -75,7 +75,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	//go run main.go proxy
-	proxyflag := os.Args[1]
+	proxyflag := ""
+	if len(os.Args) > 1 {
+		proxyflag = os.Args[1]
+	}
 	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses, proxyflag)
 
 	//удаляем отчеканные адреса и оставляем остатки, если есть
@@ -149,12 +152,12 @@ func processWithGrok(ctx context.Context, twitterUsers []string) (map[string]str
 	}
 	defer grokConfig.Close()
 
-	gist, err := paste.NewGitGist()
+	notion, err := paste.NewNotionClient()
 	if err != nil {
 		slog.Error("Не удалось создать GitHub Gist клиент", "err", err)
 		return nil, nil
 	}
-	defer gist.Close()
+	defer notion.Close()
 
 	pool := grokclient.NewSessionPool(grokConfig)
 
@@ -192,7 +195,7 @@ func processWithGrok(ctx context.Context, twitterUsers []string) (map[string]str
 
 		// Сохраняем результат в GitHub Gist
 		go func(user, text string, index int) {
-			_, err := gist.CreatePaste(text, gistURLs)
+			err := notion.CreatePaste(text, gistURLs)
 			if err != nil {
 				slog.Error("Не удалось создать Gist", "username", user, "err", err)
 				mu.Lock()
