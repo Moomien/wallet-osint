@@ -2,6 +2,7 @@ package Notion
 
 import (
 	log "arkham_checker/checker/logger"
+	"arkham_checker/checker/ratelimiter"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -32,7 +33,8 @@ func NewNotionClient() (*Notion, error) {
 	}
 
 	bearer := os.Getenv("Notion")
-	c := resty.New()
+	limiter := ratelimiter.NewRateLimiter(3, 1)
+	c := resty.New().SetRateLimiter(limiter)
 	headers := map[string]string{
 		"Authorization":  "Bearer " + bearer,
 		"Notion-Version": "2022-06-28",
