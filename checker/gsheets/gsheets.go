@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	credentialsFile = "credentials.json"
-	tokenFile       = "token.json"
+	credentialsFile = "gsheets/credentials.json"
+	tokenFile       = "gsheets/token.json"
 )
 
 type GSheets struct {

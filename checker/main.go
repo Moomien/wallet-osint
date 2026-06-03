@@ -2,7 +2,12 @@ package main
 
 import (
 	"arkham_checker/checker/checker"
+	"arkham_checker/checker/grokclient"
+	paste "arkham_checker/checker/grokclient/paste_service"
+	"arkham_checker/checker/gsheets"
+	"arkham_checker/checker/interceptor"
 	Resolver "arkham_checker/checker/resolver"
+	"arkham_checker/checker/session"
 	"arkham_checker/checker/storage"
 	"context"
 	"fmt"
@@ -12,6 +17,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -19,9 +25,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// я хз как еще можно расширить приложение.
-// может как-то сделать анализ челиков с помощью grok.
-// сделать чтобы сохраняло инфу по челикам. сохраняло линк на твиттер, юз тг, ссылка pastebin с инфой о них.
 func main() {
 	//настройка вывода логов в терминал и отдельный файл
 	file, err := os.OpenFile("app.log", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -64,7 +67,7 @@ func main() {
 	}
 
 	if len(uniqaddresses) != len(addresses) {
-		fmt.Printf("Удалено %d строк. Уникальные адреса: %d",
+		fmt.Printf("Удалено %d строк. Уникальные адреса: %d\n",
 			len(addresses)-len(uniqaddresses), len(uniqaddresses))
 	}
 
@@ -85,14 +88,163 @@ func main() {
 		slog.Info("File addresses.txt successfully updated", "Remaining", len(remaining))
 	}
 
-	//резолвинг юзернеймов в тг
-	if len(twitter) != 0 {
-		tgUsernames := Resolver.CheckUsernames(twitter)
-		twitterOutput(twitter, tgUsernames)
-		slog.Info("Успешно сохранил твиттер и тг в result.txt")
+	if len(twitter) == 0 {
+		slog.Info("Было найдено 0 ссылок твиттер, поэтому ничего не выведу :(")
 		return
 	}
-	slog.Info("Было найдено 0 ссылок твиттер, поэтому ничего не выведу :(")
+
+	slog.Info("Найдено Twitter аккаунтов", "count", len(twitter))
+	tgUsernames := Resolver.CheckUsernames(twitter)
+	slog.Info("Резолвинг Telegram завершен", "count", len(tgUsernames))
+
+	// Сохраняем в result.txt (старый вывод)
+	twitterOutput(twitter, tgUsernames)
+	slog.Info("Успешно сохранил твиттер и тг в result.txt")
+
+	// Отправка на Grok через пул воркеров
+	slog.Info("Запускаю обработку через Grok...")
+	grokResults, pastes := processWithGrok(ctx, twitter)
+	slog.Info("Обработка Grok завершена", "успешно", len(grokResults))
+
+	// Сохранение в Google Sheets
+	slog.Info("Создаю Google Sheets таблицу...")
+	if err := saveToGoogleSheets(ctx, uniqaddresses, twitter, tgUsernames, pastes); err != nil {
+		slog.Error("Не удалось создать Google Sheets таблицу", "err", err)
+	} else {
+		slog.Info("Данные успешно сохранены в Google Sheets")
+	}
+
+	slog.Info("Работа завершена успешно!")
+}
+
+// processWithGrok обрабатывает Twitter юзернеймы через Grok
+func processWithGrok(ctx context.Context, twitterUsers []string) (map[string]string, []string) {
+	promptBytes, err := os.ReadFile("grokclient/prompt.txt")
+	if err != nil {
+		slog.Error("Не удалось прочитать prompt.txt", "err", err)
+		return nil, nil
+	}
+	prompt := string(promptBytes)
+
+	useragent := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+	cacheSession, err := session.NewCache(true, "grok.com")
+	if err != nil {
+		slog.Error("Не удалось создать session cache", "err", err)
+		return nil, nil
+	}
+	defer cacheSession.Close()
+
+	inter, err := interceptor.NewInterceptor(cacheSession)
+	if err != nil {
+		slog.Error("Не удалось создать interceptor", "err", err)
+		return nil, nil
+	}
+	defer inter.Close()
+
+	grokConfig, err := grokclient.NewGrokConfig("grokclient/sessions", inter)
+	if err != nil {
+		slog.Error("Не удалось создать GrokConfig", "err", err)
+		return nil, nil
+	}
+	defer grokConfig.Close()
+
+	gist, err := paste.NewGitGist()
+	if err != nil {
+		slog.Error("Не удалось создать GitHub Gist клиент", "err", err)
+		return nil, nil
+	}
+	defer gist.Close()
+
+	pool := grokclient.NewSessionPool(grokConfig)
+
+	var mu sync.Mutex
+	results := make(map[string]string)
+	pastes := make([]string, len(twitterUsers))
+	userIndexMap := make(map[string]int)
+
+	// Создаем мапу для сохранения порядка юзернеймов
+	for i, user := range twitterUsers {
+		userIndexMap[user] = i
+	}
+
+	gistURLs := make(chan string, len(twitterUsers))
+
+	onResult := func(username, result string, err error) {
+		mu.Lock()
+		userIndex := userIndexMap[username]
+		mu.Unlock()
+
+		if err != nil {
+			slog.Error("Ошибка обработки пользователя", "username", username, "err", err)
+			mu.Lock()
+			results[username] = ""
+			pastes[userIndex] = ""
+			mu.Unlock()
+			return
+		}
+
+		mu.Lock()
+		results[username] = result
+		mu.Unlock()
+
+		slog.Info("Обработан пользователь", "username", username)
+
+		// Сохраняем результат в GitHub Gist
+		go func(user, text string, index int) {
+			_, err := gist.CreatePaste(text, gistURLs)
+			if err != nil {
+				slog.Error("Не удалось создать Gist", "username", user, "err", err)
+				mu.Lock()
+				pastes[index] = ""
+				mu.Unlock()
+				return
+			}
+
+			// Получаем URL из канала
+			select {
+			case url := <-gistURLs:
+				mu.Lock()
+				pastes[index] = url
+				mu.Unlock()
+				slog.Info("Создан Gist", "username", user, "url", url)
+			case <-time.After(10 * time.Second):
+				slog.Error("Таймаут получения Gist URL", "username", user)
+				mu.Lock()
+				pastes[index] = ""
+				mu.Unlock()
+			}
+		}(username, result, userIndex)
+	}
+
+	if err := pool.RunWorkers(ctx, twitterUsers, onResult, prompt, useragent); err != nil {
+		slog.Error("Ошибка при запуске воркеров", "err", err)
+		return nil, nil
+	}
+
+	// Ждем завершения создания всех Gist
+	time.Sleep(5 * time.Second)
+
+	return results, pastes
+}
+
+// saveToGoogleSheets сохраняет данные в Google Sheets
+func saveToGoogleSheets(ctx context.Context, wallets, twitter, tgUsernames, pastes []string) error {
+	gs, err := gsheets.NewGhsheet(ctx, twitter, wallets, tgUsernames, pastes)
+	if err != nil {
+		return fmt.Errorf("создание GSheets клиента: %w", err)
+	}
+	defer gs.Close()
+
+	url, err := gs.CreateTable()
+	if err != nil {
+		return fmt.Errorf("создание таблицы: %w", err)
+	}
+
+	slog.Info("Таблица создана", "url", url)
+	fmt.Printf("\nGoogle Sheets таблица создана: %s\n\n", url)
+
+	return nil
 }
 
 // вывод в .txt ссылок твиттера и юзернеймов тг
