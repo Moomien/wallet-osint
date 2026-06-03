@@ -19,13 +19,12 @@ import (
 
 // возвращает линки и остатки адресов если есть
 func CollectTwitters(ctx context.Context, db storage.Storage, addresses []string, flag string) ([]string, []string) {
-	goLimiter := ratelimiter.NewRateLimiter(20, 5)
+	goLimiter := ratelimiter.NewRateLimiter(15, 5)
 	client := resty.New().SetRateLimiter(goLimiter)
 
 	twitter := make([]string, len(addresses))
 	completed := make([]bool, len(addresses))
 
-	sem := make(chan struct{}, 15) // специально делаем семафор большим чтобы хватило рейтлимитеру
 	var wg sync.WaitGroup
 
 	for i, adres := range addresses {
@@ -36,8 +35,6 @@ func CollectTwitters(ctx context.Context, db storage.Storage, addresses []string
 			wg.Add(1)
 			go func(idx int, adr string) {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
 
 				tw := fetchTwitterWithRetry(ctx, client, adr, flag)
 				if tw == "Canceled" {

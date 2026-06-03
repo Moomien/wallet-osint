@@ -1,49 +1,55 @@
-## Arkham checker
+## Wallet Doxxer
 
-Утилита на Go, которая читает список криптокошельков из `addresses.txt`, реквестит Arkham API и вытаскивает привязанный Twitter (если есть). Результат сохраняется в `result.txt`.
+Пробиваешь крипто кошельки, вытаскиваешь твиттеры, телеграм ники, прогоняешь через Grok AI и пушишь всё в Google Sheets. Всё автоматом, без лишних движений.
 
-### Как работает
+### Что умеет
 
-- Загружает переменные окружения из `.env` (смотри .env.example)
-- Читает `addresses.txt`, сравнивает с адресами в бд на уникальность.
-- Для каждого адреса параллельно делает запрос к `https://api.arkm.com/intelligence/address/<address>`.
-- Ограничивает количество одновременных запросов семафором (буферизованный канал), чтобы не перегружать API.
-- Достаёт поле `arkhamEntity.twitter` из JSON-ответа и сохраняем пачку адресов в BadgerDB. Если Twitter не найден или запрос не удался после ретраев, адрес пропускается.
-- Затем резолвит твиттер ники в телеграм на существование.
-- Пишет собранные Twitter ссылки и тг юзернеймы в `result.txt`.
+- Читает кошельки из `addresses.txt`
+- Проверяет уникальность в BadgerDB (не прогоняет одно и то же дважды)
+- Параллельно пробивает по Arkham API и тянет привязанные Twitter аккаунты
+- Резолвит твиттер ники в телеграм юзернеймы
+- Прогоняет каждый твиттер аккаунт через Grok AI (анализ профиля, активность, связи)
+- Публикует результаты от Grok в GitHub Gist
+- Собирает все данные в Google Sheets таблицу с колонками: Wallet → Twitter → Telegram → Gist
+- Сохраняет бэкап в `result.txt`
 
-### Запуск
+### Как запустить
 
-1. Создай `.env` рядом с `main.go`:
+1. Настрой `.env` (смотри `.env.example`):
 
 ```
 cookie=...твой cookie из intel.arkm.com...
 ```
 
-2. Заполни `addresses.txt`
+2. Подготовь файлы:
+   - `addresses.txt` — список кошельков (по одному на строку)
+   - `proxy.txt` (опционально) — прокси в формате `http://логин:пароль@адрес:порт`
+   - `grokclient/sessions/` — сессии Grok (файлы с куками)
+   - `gsheets/credentials.json` — креды для Google Sheets API
 
-```
-0x...
-0x...
-```
-и если нужны прокси - proxy.txt в формате `http://логин:пароль@адрес_прокси:порт`:
-```
-http://логин:пароль@адрес_прокси:порт
-http://логин:пароль@адрес_прокси:порт
-http://логин:пароль@адрес_прокси:порт
-```
-```
 3. Запусти:
 
 ```bash
-go run main.go - без прокси
-go run main.go proxy - с прокси
+go run main.go          # без прокси
+go run main.go proxy    # с прокси
 ```
 
-### Использованные библиотеки
+### Что внутри
 
-- `github.com/go-resty/resty/v2` — HTTP-клиент
-- `github.com/tidwall/gjson` — быстрое чтение полей из JSON
-- `github.com/joho/godotenv` — загрузка `.env`
-- `github.com/gotd/td/` - Тг резолвер
-- `github.com/dgraph-io/badger/v4` - Бессерверное решение для хранения адресов
+- `checker/` — модуль сбора твиттеров через Arkham
+- `resolver/` — резолвинг твиттер → телеграм
+- `grokclient/` — пул воркеров для Grok AI
+- `gsheets/` — выгрузка в Google Sheets
+- `storage/` — BadgerDB для отсева дубликатов
+- `session/` — кеш и управление сессиями
+- `interceptor/` — перехват и подмена cookies
+
+### Стек
+
+- `github.com/go-resty/resty/v2` — HTTP клиент
+- `github.com/tidwall/gjson` — парсинг JSON
+- `github.com/joho/godotenv` — .env файлы
+- `github.com/gotd/td/` — Telegram резолвер
+- `github.com/dgraph-io/badger/v4` — локальная БД
+- `google.golang.org/api/sheets/v4` — Google Sheets API
+- `github.com/go-rod/rod` — браузер автоматизация для сессий
