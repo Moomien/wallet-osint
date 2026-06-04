@@ -1,0 +1,26 @@
+{
+  "name": "session_2026-06-05_01-00-54.json",
+  "rows": [
+    {
+      "Wallet": "0x1234567890abcdef1234567890abcdef12345678",
+      "Twitter": "@cryptodsfsdfsdsdfsdfdsfsduser1",
+      "TgUsername": "crypto_ussdfdsfdsfdsfdsfer_1",
+      "PasteTitle": "View",
+      "PasteText": "Analysis for wallet 1:\nThis wallet shows significant activity in DeFi protocols.\nTotal transactions: 150\nAverage transaction value: 0.5 ETH"
+    },
+    {
+      "Wallet": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      "Twitter": "@blockchaifsdfsdfsdfsdfsdfsdfdsfsdn_dev",
+      "TgUsername": "blockchain_developer",
+      "PasteTitle": "View",
+      "PasteText": "Analysis for wallet 2:\nThis wallet is primarily used for NFT trading.\nTotal NFT purchases: 45\nEstimated portfolio value: 12.5 ETH"
+    },
+    {
+      "Wallet": "0x9876543210fedcba9876543210fedcba98765432",
+      "Twitter": "@web3_enthufsdfsdfsdfsdsiast",
+      "TgUsername": "web3enthussdfdsfdsfdsfsdfiast",
+      "PasteTitle": "View",
+      "PasteText": "Analysis for wallet 3:\nThis wallet has minimal activity.\nTotal transactions: 8\nLast activity: 30 days ago"
+    }
+  ]
+}
