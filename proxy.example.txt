@@ -1,0 +1,4 @@
+http://username:password@host:port
+http://user:pass@192.168.1.1:8080
+socks5://username:password@host:port
+http://proxy.example.com:3128
