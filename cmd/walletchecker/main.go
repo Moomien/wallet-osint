@@ -21,6 +21,13 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Загружаем .env
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("Предупреждение: .env файл не найден")
@@ -29,8 +36,7 @@ func main() {
 	// Получаем cookie из .env
 	cookie := os.Getenv("cookie")
 	if cookie == "" {
-		fmt.Println("Ошибка: переменная 'cookie' не установлена в .env файле")
-		os.Exit(1)
+		return fmt.Errorf("переменная 'cookie' не установлена в .env файле")
 	}
 
 	// Проверяем аргументы командной строки для proxy
@@ -57,35 +63,31 @@ func main() {
 	// Инициализируем компоненты
 	logger, err := log.NewLogger("main")
 	if err != nil {
-		fmt.Printf("Ошибка создания логгера: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("создание логгера: %w", err)
 	}
 	defer logger.Close()
 
 	db, err := storage.NewBadgerDB()
 	if err != nil {
-		logger.Error("Ошибка создания БД", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("создание БД: %w", err)
 	}
 	defer db.Close()
 
 	// Читаем адреса из файла
 	addresses, err := readAddresses("addresses.txt")
 	if err != nil {
-		logger.Error("Ошибка чтения адресов", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("чтение адресов: %w", err)
 	}
 
 	if len(addresses) == 0 {
 		logger.Info("Нет адресов для обработки")
-		return
+		return nil
 	}
 
 	// Фильтруем уникальные адреса
 	uniqueAddresses, err := db.UniqueAddresses(addresses)
 	if err != nil {
-		logger.Error("Ошибка фильтрации адресов", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("фильтрация адресов: %w", err)
 	}
 
 	logger.Info(fmt.Sprintf("Всего адресов: %d, уникальных: %d", len(addresses), len(uniqueAddresses)))
@@ -101,16 +103,14 @@ func main() {
 
 	arkham, err := checker.NewArkhamClient(arkhamCfg)
 	if err != nil {
-		logger.Error("Ошибка создания Arkham клиента", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("создание Arkham клиента: %w", err)
 	}
 
 	// Собираем Twitter аккаунты
 	logger.Info("Начинаем сбор Twitter аккаунтов...")
 	twitters, remaining, err := checker.CollectTwitters(ctx, db, arkham, uniqueAddresses)
 	if err != nil {
-		logger.Error("Ошибка сбора Twitter", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("сбор Twitter: %w", err)
 	}
 
 	if len(remaining) > 0 {
@@ -121,7 +121,7 @@ func main() {
 
 	if len(twitters) == 0 {
 		logger.Info("Нет Twitter аккаунтов для дальнейшей обработки")
-		return
+		return nil
 	}
 
 	// Резолвим Telegram юзернеймы
@@ -172,29 +172,25 @@ func main() {
 	logger.Info("Инициализация Grok...")
 	cacheSession, err := session.NewCache(true, "grok.com")
 	if err != nil {
-		logger.Error("Ошибка создания session cache", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("создание session cache: %w", err)
 	}
 	defer cacheSession.Close()
 
 	inter, err := interceptor.NewInterceptor(cacheSession)
 	if err != nil {
-		logger.Error("Ошибка создания interceptor", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("создание interceptor: %w", err)
 	}
 
 	grokConfig, err := grokclient.NewGrokConfig(inter)
 	if err != nil {
-		logger.Error("Ошибка создания Grok config", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("создание Grok config: %w", err)
 	}
 	defer grokConfig.Close()
 
 	// Читаем промпт
 	promptBytes, err := os.ReadFile("prompt.txt")
 	if err != nil {
-		logger.Error("Ошибка чтения prompt.txt", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("чтение prompt.txt: %w", err)
 	}
 	prompt := string(promptBytes)
 
@@ -258,6 +254,7 @@ func main() {
 	fyneapp.Run(rows)
 
 	logger.Info("Программа завершена")
+	return nil
 }
 
 // readAddresses читает адреса из файла
