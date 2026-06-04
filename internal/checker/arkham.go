@@ -1,9 +1,9 @@
 package checker
 
 import (
+	log "arkham_checker/internal/logger"
 	"context"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"os"
 	"strconv"
@@ -20,6 +20,7 @@ type ArkhamClient struct {
 	cookie    string
 	proxyFunc func() string
 	flag      string
+	logger    log.Log
 }
 
 type ArkhamConfig struct {
@@ -31,6 +32,11 @@ type ArkhamConfig struct {
 }
 
 func NewArkhamClient(cfg ArkhamConfig) (*ArkhamClient, error) {
+	logger, err := log.NewLogger("arkham")
+	if err != nil {
+		return nil, fmt.Errorf("создание логгера arkham: %w", err)
+	}
+
 	client := resty.New()
 
 	if cfg.RPS > 0 && cfg.Burst > 0 {
@@ -52,6 +58,7 @@ func NewArkhamClient(cfg ArkhamConfig) (*ArkhamClient, error) {
 		cookie:    cfg.Cookie,
 		proxyFunc: proxyFunc,
 		flag:      cfg.Flag,
+		logger:    logger,
 	}, nil
 }
 
@@ -76,7 +83,7 @@ func (a *ArkhamClient) FetchTwitter(ctx context.Context, address string) (string
 				if ctx.Err() != nil {
 					return "", ctx.Err()
 				}
-				slog.Error("Failed to request wallet, retrying", "wallet", address, "attempt", attempt+1, "error", err)
+				a.logger.Error("Failed to request wallet, retrying", "wallet", address, "attempt", attempt+1, "error", err)
 				continue
 			}
 
@@ -93,7 +100,7 @@ func (a *ArkhamClient) FetchTwitter(ctx context.Context, address string) (string
 				if sleepDur == 0 {
 					sleepDur = exponentialBackoff[attempt] + jitter
 				}
-				slog.Info("429 Too Many Requests, sleeping", "duration", sleepDur, "wallet", address)
+				a.logger.Info("429 Too Many Requests, sleeping", "duration", sleepDur, "wallet", address)
 
 				select {
 				case <-ctx.Done():
@@ -112,7 +119,7 @@ func (a *ArkhamClient) FetchTwitter(ctx context.Context, address string) (string
 			}
 
 			// Если другой статус код, но не 429
-			slog.Warn("Unexpected status code", "status", resp.StatusCode(), "wallet", address)
+			a.logger.Warn("Unexpected status code", "status", resp.StatusCode(), "wallet", address)
 		}
 	}
 

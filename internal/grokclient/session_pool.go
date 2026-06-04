@@ -18,9 +18,9 @@ type SessionPool struct {
 
 // создаёт новый пул сессий
 func NewSessionPool(config *GrokConfig) *SessionPool {
-	logger, err := log.NewLogger("SessionPool")
+	logger, err := log.NewLogger("session_pool")
 	if err != nil {
-		fmt.Println("Ошибка создания логгера SessionPool")
+		fmt.Println("Ошибка создания логгера session_pool")
 		return nil
 	}
 	sessions := config.GetSessionNames()

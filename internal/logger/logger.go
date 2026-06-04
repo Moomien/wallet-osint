@@ -22,10 +22,10 @@ type Logger struct {
 	logfile *os.File
 }
 
-func NewLogger(filename string) (*Logger, error) {
-	logger, logfile, err := newLogger(filename)
+func NewLogger(componentName string) (*Logger, error) {
+	logger, logfile, err := newLogger(componentName)
 	if err != nil {
-		return nil, fmt.Errorf("HE получилось создать логгер %s. Error: %w", filename, err)
+		return nil, fmt.Errorf("не получилось создать логгер %s. Error: %w", componentName, err)
 	}
 	return &Logger{
 		Log:     logger,
@@ -33,9 +33,8 @@ func NewLogger(filename string) (*Logger, error) {
 	}, nil
 }
 
-// создает новый логгер
-func newLogger(name string) (*slog.Logger, *os.File, error) {
-
+// создает новый логгер с отдельным файлом для компонента
+func newLogger(componentName string) (*slog.Logger, *os.File, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return nil, nil, fmt.Errorf("не удалось получить путь рабочей директории")
@@ -46,15 +45,14 @@ func newLogger(name string) (*slog.Logger, *os.File, error) {
 		return nil, nil, fmt.Errorf("не удалось создать директорию логов: %w", err)
 	}
 
-	logpath := filepath.Join(logDir, "app.log")
+	logpath := filepath.Join(logDir, componentName+".log")
 	file, err := os.OpenFile(logpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, nil, fmt.Errorf("не удалось открыть файл лога: %w", err)
 	}
 
 	multiWriter := io.MultiWriter(os.Stdout, file)
-	//чтобы добавить debug логи нужно прописать
-	logger := slog.New(slog.NewJSONHandler(multiWriter, nil)).With("component", name)
+	logger := slog.New(slog.NewJSONHandler(multiWriter, nil)).With("component", componentName)
 
 	return logger, file, nil
 }

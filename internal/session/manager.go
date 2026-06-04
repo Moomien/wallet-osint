@@ -57,7 +57,7 @@ func NewCache(headless bool, domain string) (*CacheSession, error) {
 	//делаем отдельный логгер для этого модуля
 	baseDir := filepath.Join("data", "grok", "grok.com")
 	cachePath := filepath.Join(baseDir, "cache.json")
-	logger, err := log.NewLogger(baseDir)
+	logger, err := log.NewLogger("session")
 	if err != nil {
 		return nil, fmt.Errorf("создание логгера: %w", err)
 	}

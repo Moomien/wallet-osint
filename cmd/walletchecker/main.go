@@ -115,6 +115,20 @@ func run() error {
 
 	if len(remaining) > 0 {
 		logger.Warn(fmt.Sprintf("Не обработано адресов: %d", len(remaining)))
+
+		// Записываем необработанные адреса обратно в файл
+		if err := writeAddresses("addresses.txt", remaining); err != nil {
+			logger.Error("Не удалось записать оставшиеся адреса", "error", err)
+		} else {
+			logger.Info("Оставшиеся адреса сохранены в addresses.txt")
+		}
+	} else {
+		// Если все обработаны, очищаем файл
+		if err := writeAddresses("addresses.txt", []string{}); err != nil {
+			logger.Error("Не удалось очистить addresses.txt", "error", err)
+		} else {
+			logger.Info("Все адреса обработаны, addresses.txt очищен")
+		}
 	}
 
 	logger.Info(fmt.Sprintf("Собрано Twitter аккаунтов: %d", len(twitters)))
@@ -145,7 +159,10 @@ func run() error {
 		var appID int
 		fmt.Sscanf(appIDStr, "%d", &appID)
 
-		tgResolver := Resolver.NewResolver(appID, appHash, botToken)
+		tgResolver, err := Resolver.NewResolver(appID, appHash, botToken)
+		if err != nil {
+			return fmt.Errorf("создание Telegram resolver: %w", err)
+		}
 
 		resolvedUsernames, err := tgResolver.CheckUsernames(ctx, cleanTwitters)
 		if err != nil {
@@ -279,4 +296,22 @@ func readAddresses(filename string) ([]string, error) {
 	}
 
 	return addresses, nil
+}
+
+// writeAddresses записывает адреса в файл
+func writeAddresses(filename string, addresses []string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	for _, addr := range addresses {
+		if _, err := writer.WriteString(addr + "\n"); err != nil {
+			return err
+		}
+	}
+
+	return writer.Flush()
 }

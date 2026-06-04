@@ -1,10 +1,10 @@
 package checker
 
 import (
+	log "arkham_checker/internal/logger"
 	"arkham_checker/internal/storage"
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"golang.org/x/time/rate"
@@ -33,6 +33,12 @@ type TwitterFetcher interface {
 
 // возвращает линки и остатки адресов если есть
 func CollectTwitters(ctx context.Context, db storage.Storage, fetcher TwitterFetcher, addresses []string) ([]string, []string, error) {
+	logger, err := log.NewLogger("checker")
+	if err != nil {
+		return nil, nil, fmt.Errorf("создание логгера checker: %w", err)
+	}
+	defer logger.Close()
+
 	twitter := make([]string, len(addresses))
 	completed := make([]bool, len(addresses))
 
@@ -53,13 +59,13 @@ func CollectTwitters(ctx context.Context, db storage.Storage, fetcher TwitterFet
 						return // Canceled
 					}
 					completed[idx] = true
-					slog.Info("Failed to fetch wallet", "index", idx, "wallet", adr, "error", err)
+					logger.Info("Failed to fetch wallet", "index", idx, "wallet", adr, "error", err)
 					return
 				}
 
 				if tw != "" {
 					twitter[idx] = tw
-					slog.Info("Fetched wallet Twitter", "index", idx, "wallet", adr, "twitter", tw)
+					logger.Info("Fetched wallet Twitter", "index", idx, "wallet", adr, "twitter", tw)
 					return
 				}
 
@@ -83,7 +89,7 @@ wait:
 	if err := db.Save(batch); err != nil {
 		return nil, nil, fmt.Errorf("DB Saver error: %w", err)
 	}
-	slog.Info("Успешно сохранил адреса в бд")
+	logger.Info("Успешно сохранил адреса в бд")
 
 	//очистка от пустых значений
 	keep := 0

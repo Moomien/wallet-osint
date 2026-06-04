@@ -1,9 +1,9 @@
 package Resolver
 
 import (
+	log "arkham_checker/internal/logger"
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -16,6 +16,7 @@ type Resolver struct {
 	client   *telegram.Client
 	api      *tg.Client
 	botToken string
+	logger   log.Log
 }
 
 func (resolver *Resolver) CheckUsernames(ctx context.Context, addresses []string) (usernames []string, err error) {
@@ -44,40 +45,40 @@ func (resolver *Resolver) CheckUsernames(ctx context.Context, addresses []string
 
 				if err != nil {
 					if rpcErr, ok := tgerr.As(err); ok {
-						slog.Error("RPC error", "message", rpcErr.Message, "user", user)
+						resolver.logger.Error("RPC error", "message", rpcErr.Message, "user", user)
 					}
-					//ретраим если попали в лимит
+
+					// Ретраим только если попали в FLOOD_WAIT
 					if tgerr.Is(err, "FLOOD_WAIT") {
 						for i := 0; i < 6; i++ {
-							fmt.Println("Попали в лимит, ретрай:", i)
+							resolver.logger.Info("Попали в лимит, ретрай", "attempt", i, "user", user)
 							retry := retryafter(i)
 							time.Sleep(retry)
 
 							resolved, err = resolver.api.ContactsResolveUsername(ctx,
 								&tg.ContactsResolveUsernameRequest{Username: user})
 
-							if tgerr.Is(err, "FLOOD_WAIT") {
+							// Если снова FLOOD_WAIT - продолжаем ретрай
+							if err != nil && tgerr.Is(err, "FLOOD_WAIT") {
 								continue
 							}
 
-							if len(resolved.Chats) > 0 || len(resolved.Users) > 0 {
-								mu.Lock()
-								usernames = append(usernames, user)
-								mu.Unlock()
-							}
+							// Если успешно или другая ошибка - выходим из цикла
+							break
 						}
 					}
 
-					return
+					// Если после всех ретраев всё ещё ошибка - выходим
+					if err != nil {
+						return
+					}
 				}
 
-				//если все норм никаких лимитов - добавляем
-				if len(resolved.Users) > 0 || len(resolved.Chats) > 0 {
+				// Если все норм - добавляем юзернейм
+				if resolved != nil && (len(resolved.Users) > 0 || len(resolved.Chats) > 0) {
 					mu.Lock()
 					usernames = append(usernames, user)
 					mu.Unlock()
-				} else {
-					return
 				}
 			}(user)
 		}
@@ -93,7 +94,12 @@ func (resolver *Resolver) CheckUsernames(ctx context.Context, addresses []string
 	return usernames, nil
 }
 
-func NewResolver(appID int, appHash, botToken string) *Resolver {
+func NewResolver(appID int, appHash, botToken string) (*Resolver, error) {
+	logger, err := log.NewLogger("resolver")
+	if err != nil {
+		return nil, fmt.Errorf("создание логгера resolver: %w", err)
+	}
+
 	client := telegram.NewClient(appID, appHash, telegram.Options{})
 	api := client.API()
 
@@ -101,7 +107,8 @@ func NewResolver(appID int, appHash, botToken string) *Resolver {
 		client:   client,
 		api:      api,
 		botToken: botToken,
-	}
+		logger:   logger,
+	}, nil
 }
 
 func retryafter(i int) time.Duration {
