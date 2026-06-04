@@ -23,7 +23,7 @@ const (
 	limitCheckTimeout = 4000
 )
 
-// CacheSession управляет сессиями Playwright и их кэшированием.
+// управляет сессиями Playwright и их кэшированием.
 type CacheSession struct {
 	mu        sync.RWMutex
 	data      map[string]*SessionInfo
@@ -31,10 +31,10 @@ type CacheSession struct {
 	domain    string
 	pw        *playwright.Playwright
 	Browser   playwright.Browser
-	log       *log.Logger
+	log       log.Log
 }
 
-// SessionInfo содержит данные о состоянии конкретной сессии.
+// содержит данные о состоянии конкретной сессии.
 type SessionInfo struct {
 	Cookies     []playwright.OptionalCookie `json:"cookies"`
 	Valid       bool                        `json:"Valid"`
@@ -48,7 +48,8 @@ type Cookie struct {
 	Value string `json:"value"`
 }
 
-// NewCache создает новый экземпляр менеджера сессий и инициализирует браузер.
+//	создает новый экземпляр менеджера сессий и инициализирует браузер.
+//
 // собирает один единый json файл из множества других json
 // запускает чек куки и проходится по каждому куки из json и
 // аллоцирует куки в мапу
@@ -139,7 +140,7 @@ func NewCache(headless bool, domain string) (*CacheSession, error) {
 	return c, nil
 }
 
-// GetSession возвращает первую доступную валидную куку из кэша.
+// возвращает первую доступную валидную куку из кэша.
 func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, string, error) {
 	c.mu.Lock()
 	var targetCookies []playwright.OptionalCookie
@@ -171,7 +172,8 @@ func (c *CacheSession) GetSession() ([]playwright.OptionalCookie, string, error)
 	return targetCookies, targetKey, nil
 }
 
-// MarkInvalid помечает сессию как невалидную
+//	помечает сессию как невалидную
+//
 // например, при достижении лимита
 func (c *CacheSession) MarkInvalid(key string, waitTime time.Duration) {
 	c.mu.Lock()
@@ -209,7 +211,7 @@ func (c *CacheSession) cacheJSON() error {
 	return os.WriteFile(c.cachePath, prettyJSON, 0644)
 }
 
-// CheckSession проверяет валидность сессии, выполняя тестовое действие в браузере.
+// проверяет валидность сессии, выполняя тестовое действие в браузере.
 func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 	select {
 	case <-ctx.Done():
@@ -352,7 +354,7 @@ func (c *CacheSession) CheckSession(ctx context.Context, useragent string) {
 	}
 }
 
-// Close корректно завершает работу браузера и Playwright и логгера
+// корректно завершает работу браузера и Playwright и логгера
 func (c *CacheSession) Close() error {
 	var errs []string
 	if c.pw != nil {

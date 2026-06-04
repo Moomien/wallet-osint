@@ -2,9 +2,9 @@ package grokclient
 
 import (
 	log "arkham_checker/checker/logger"
-	"arkham_checker/checker/ratelimiter"
 	"errors"
 	"sync"
+	"golang.org/x/time/rate"
 
 	"context"
 	_ "embed"
@@ -39,8 +39,24 @@ type GrokClient struct {
 	prompt         string
 	currentSession string
 	mu             sync.Mutex
-	rateLimiter    *ratelimiter.RateLimiter
-	log            *log.Logger
+	rateLimiter    *restyLimiter
+	log            log.Log
+}
+
+// restyLimiter — адаптер rate.Limiter для resty (Wait вместо Allow)
+type restyLimiter struct {
+	limiter *rate.Limiter
+}
+
+func newRestyLimiter(rps, burst int) *restyLimiter {
+	return &restyLimiter{limiter: rate.NewLimiter(rate.Limit(rps), burst)}
+}
+
+func (r *restyLimiter) Allow() bool {
+	if err := r.limiter.Wait(context.Background()); err != nil {
+		return false
+	}
+	return true
 }
 
 func NewGrokClient(prompt, useragent string) (*GrokClient, error) {
@@ -49,7 +65,7 @@ func NewGrokClient(prompt, useragent string) (*GrokClient, error) {
 		return nil, fmt.Errorf("создание логгера grokclient: %w", err)
 	}
 
-	limiter := ratelimiter.NewRateLimiter(1, 1)
+	limiter := newRestyLimiter(1, 1)
 	c := resty.New()
 	c.SetRateLimiter(limiter)
 
@@ -69,14 +85,14 @@ func (x *GrokClient) Close() error {
 	return x.log.Close()
 }
 
-// SetSession устанавливает активную сессию (потокобезопасно)
+// устанавливает активную сессию (потокобезопасно)
 func (x *GrokClient) SetSession(sessionName string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.currentSession = sessionName
 }
 
-// GetSession возвращает имя текущей сессии (потокобезопасно)
+// возвращает имя текущей сессии (потокобезопасно)
 func (x *GrokClient) GetSession() string {
 	x.mu.Lock()
 	defer x.mu.Unlock()

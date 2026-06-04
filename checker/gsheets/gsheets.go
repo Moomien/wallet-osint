@@ -22,18 +22,20 @@ const (
 	tokenFile       = "gsheets/token.json"
 )
 
-type GSheets struct {
-	service     *sheets.Service
-	wallets     []string
-	twitter     []string
-	tgUsernames []string
-	pastes      []string
-	mu          sync.RWMutex
-	log         *log.Logger
+type TableData struct {
+	Wallets     []string
+	Twitter     []string
+	TgUsernames []string
+	Pastes      []string
 }
 
-func NewGhsheet(ctx context.Context, twitter []string,
-	wallets []string, tgUsernames []string, pastes []string) (*GSheets, error) {
+type GSheets struct {
+	service *sheets.Service
+	mu      sync.RWMutex
+	log     log.Log
+}
+
+func NewGhsheet(ctx context.Context) (*GSheets, error) {
 
 	logger, err := log.NewLogger("GSheets")
 	if err != nil {
@@ -61,12 +63,8 @@ func NewGhsheet(ctx context.Context, twitter []string,
 	}
 
 	return &GSheets{
-		service:     service,
-		twitter:     twitter,
-		wallets:     wallets,
-		tgUsernames: tgUsernames,
-		pastes:      pastes,
-		log:         logger,
+		service: service,
+		log:     logger,
 	}, nil
 }
 
@@ -78,11 +76,11 @@ func (g *GSheets) Close() error {
 }
 
 // создаёт таблицу, заполняет и возвращает ссылку на неё
-func (g *GSheets) CreateTable() (string, error) {
+func (g *GSheets) CreateTable(data TableData) (string, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	maxLen := max(len(g.wallets), len(g.tgUsernames), len(g.pastes))
+	maxLen := max(len(data.Wallets), len(data.TgUsernames), len(data.Pastes))
 
 	if maxLen == 0 {
 		return "", fmt.Errorf("нет данных для создания таблицы")
@@ -93,10 +91,10 @@ func (g *GSheets) CreateTable() (string, error) {
 
 	for i := 0; i < maxLen; i++ {
 		row := []any{
-			valueOrEmpty(g.wallets, i),
-			valueOrEmpty(g.twitter, i),
-			valueOrEmpty(g.tgUsernames, i),
-			valueOrEmpty(g.pastes, i),
+			valueOrEmpty(data.Wallets, i),
+			valueOrEmpty(data.Twitter, i),
+			valueOrEmpty(data.TgUsernames, i),
+			valueOrEmpty(data.Pastes, i),
 		}
 		values = append(values, row)
 	}

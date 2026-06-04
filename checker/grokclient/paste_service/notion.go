@@ -2,7 +2,6 @@ package Notion
 
 import (
 	log "arkham_checker/checker/logger"
-	"arkham_checker/checker/ratelimiter"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -23,7 +22,7 @@ var (
 
 type Notion struct {
 	client *resty.Client
-	log    *log.Logger
+	log    log.Log
 }
 
 func NewNotionClient() (*Notion, error) {
@@ -33,8 +32,7 @@ func NewNotionClient() (*Notion, error) {
 	}
 
 	bearer := os.Getenv("Notion")
-	limiter := ratelimiter.NewRateLimiter(3, 1)
-	c := resty.New().SetRateLimiter(limiter)
+	c := resty.New()
 	headers := map[string]string{
 		"Authorization":  "Bearer " + bearer,
 		"Notion-Version": "2022-06-28",
@@ -98,7 +96,7 @@ func (n *Notion) CreatePaste(text string, urls chan<- string) error {
 
 		if resp.StatusCode() == 429 {
 			n.log.Info("Notion: словили 429, ретраим...")
-			time.Sleep(time.Duration(backoff[i] + time.Duration(jitter)))
+			time.Sleep(backoff[i] + time.Duration(jitter)*time.Millisecond)
 			continue
 		}
 

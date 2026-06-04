@@ -9,6 +9,15 @@ import (
 	"strings"
 )
 
+// Log — интерфейс логгера для инъекции зависимостей
+type Log interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+	Debug(msg string, args ...any)
+	Close() error
+}
+
 type Logger struct {
 	Log     *slog.Logger
 	logfile *os.File

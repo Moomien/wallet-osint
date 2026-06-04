@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -20,16 +18,13 @@ type Resolver struct {
 	botToken string
 }
 
-func CheckUsernames(addresses []string) (usernames []string) {
-	resolver := newResolver()
-
+func (resolver *Resolver) CheckUsernames(ctx context.Context, addresses []string) (usernames []string, err error) {
 	var (
 		wg sync.WaitGroup
 		mu sync.Mutex
 	)
-	ctx := context.Background()
 
-	err := resolver.client.Run(ctx, func(ctx context.Context) error {
+	err = resolver.client.Run(ctx, func(ctx context.Context) error {
 		if _, err := resolver.client.Auth().Bot(ctx, resolver.botToken); err != nil {
 			return err
 		}
@@ -92,57 +87,29 @@ func CheckUsernames(addresses []string) (usernames []string) {
 	})
 
 	if err != nil {
-		slog.Error("failed to run client: ", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to run telegram client: %w", err)
 	}
 
-	return usernames
+	return usernames, nil
 }
 
-func newResolver() *Resolver {
-	appID, err := strconv.Atoi(os.Getenv("APP_ID"))
-	if err != nil {
-		slog.Error("failed to convert string(app_id) to int(app_id)")
-		os.Exit(1)
-	}
-
-	appHASH := os.Getenv("APP_HASH")
-	client := telegram.NewClient(appID, appHASH, telegram.Options{})
+func NewResolver(appID int, appHash, botToken string) *Resolver {
+	client := telegram.NewClient(appID, appHash, telegram.Options{})
 	api := client.API()
 
 	return &Resolver{
 		client:   client,
 		api:      api,
-		botToken: os.Getenv("BOT_TOKEN"),
+		botToken: botToken,
 	}
 }
 
 func retryafter(i int) time.Duration {
 	backoff := []time.Duration{
-		time.Millisecond * 100, 200 * time.Microsecond,
-		400 * time.Microsecond, 800 * time.Microsecond,
-		1600 * time.Microsecond, 5 * time.Second,
+		time.Millisecond * 100, 200 * time.Millisecond,
+		400 * time.Millisecond, 800 * time.Millisecond,
+		1600 * time.Millisecond, 5 * time.Second,
 	}
 
 	return backoff[i]
 }
-
-// этот метод не будет использован в конечном чекере
-// юзы будут сразу доставаться из памяти
-// это нужно для теста
-// func ExtractUsernames() []string {
-// 	// достаем ссылки вида
-// 	// https://twitter.com/Username
-// 	// https://x.com/Usenrname
-// 	twt_urls, err := os.ReadFile("usernames.txt")
-// 	if err != nil {
-// 		slog.Error("failed load txt")
-// 		os.Exit(1)
-// 	}
-
-// 	usernames := string(twt_urls)
-// 	cleanedTxt := strings.ReplaceAll(usernames, "https://twitter.com/", "")
-// 	cleanedTxt = strings.ReplaceAll(cleanedTxt, "https://x.com/", "")
-
-// 	return strings.Split(cleanedTxt, "\r\n")
-// }

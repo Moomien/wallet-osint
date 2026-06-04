@@ -34,7 +34,7 @@ type GrokConfig struct {
 	Sessions    map[string]*SessionConfig `json:"sessions"`
 	filepath    string                    `json:"-"`
 	interceptor *interceptor.Interceptor  `json:"-"`
-	log         *log.Logger               `json:"-"`
+	log         log.Log                   `json:"-"`
 	mu          sync.RWMutex              `json:"-"`
 }
 

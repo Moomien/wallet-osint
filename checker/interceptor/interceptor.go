@@ -21,10 +21,10 @@ const (
 
 type Interceptor struct {
 	session *session.CacheSession
-	log     *log.Logger
+	log     log.Log
 }
 
-// CapturedRequest представляет данные, перехваченные из сетевого запроса.
+// представляет данные, перехваченные из сетевого запроса.
 type CapturedRequest struct {
 	Headers map[string]string `json:"Headers"`
 	Body    string            `json:"Body"`
@@ -46,7 +46,8 @@ func (i *Interceptor) Close() error {
 	return i.log.Close()
 }
 
-// Capture запускает экземпляр Playwright, переходит в Grok, отправляет сообщения
+//	запускает экземпляр Playwright, переходит в Grok, отправляет сообщения
+//
 // и перехватывает запрос responses на второе сообщение.
 func (i *Interceptor) Capture(ctx context.Context, useragent string) (*CapturedRequest, error) {
 	captured := make(chan *CapturedRequest, 10)
@@ -90,7 +91,8 @@ func (i *Interceptor) Capture(ctx context.Context, useragent string) (*CapturedR
 	return nil, fmt.Errorf("не удалось перехватить запрос после %d попыток", maxRetries)
 }
 
-// attemptCapture выполняет одну попытку перехвата запроса
+//	выполняет одну попытку перехвата запроса
+//
 // Возвращает: (запрос, нужна_ли_повторная_попытка, ошибка)
 func (i *Interceptor) attemptCapture(
 	ctx context.Context,
@@ -185,7 +187,7 @@ func (i *Interceptor) attemptCapture(
 	}
 }
 
-// setupRequestInterceptor устанавливает обработчик перехвата запросов
+// устанавливает обработчик перехвата запросов
 func (i *Interceptor) setupRequestInterceptor(
 	page playwright.Page,
 	cookie []playwright.OptionalCookie,
@@ -204,7 +206,7 @@ func (i *Interceptor) setupRequestInterceptor(
 	})
 }
 
-// processInterceptedRequest обрабатывает перехваченный запрос в отдельной горутине
+// обрабатывает перехваченный запрос в отдельной горутине
 func (i *Interceptor) processInterceptedRequest(
 	request playwright.Request,
 	cookie []playwright.OptionalCookie,
@@ -240,7 +242,7 @@ func (i *Interceptor) processInterceptedRequest(
 	i.log.Info("Запрос успешно отправлен в канал")
 }
 
-// sendMessageAndWait отправляет сообщение и ждет ответа Grok
+// отправляет сообщение и ждет ответа Grok
 func (i *Interceptor) sendMessageAndWait(ctx context.Context, page playwright.Page, msg string) error {
 	// Находим поле ввода
 	textarea := i.findTextarea(page)
@@ -278,7 +280,7 @@ func (i *Interceptor) sendMessageAndWait(ctx context.Context, page playwright.Pa
 	return i.waitForGrokResponse(ctx, page, msg)
 }
 
-// sendMessageSimple отправляет сообщение без ожидания ответа
+// отправляет сообщение без ожидания ответа
 func (i *Interceptor) sendMessageSimple(page playwright.Page, msg string) error {
 	textarea := i.findTextarea(page)
 	if textarea == nil {
@@ -313,7 +315,7 @@ func (i *Interceptor) sendMessageSimple(page playwright.Page, msg string) error 
 	return nil
 }
 
-// findTextarea находит поле ввода сообщения
+// находит поле ввода сообщения
 func (i *Interceptor) findTextarea(page playwright.Page) playwright.Locator {
 	selectors := []string{
 		"textarea[placeholder*='message' i]",
@@ -334,7 +336,7 @@ func (i *Interceptor) findTextarea(page playwright.Page) playwright.Locator {
 	return nil
 }
 
-// waitForGrokResponse ждет завершения ответа Grok
+// ждет завершения ответа Grok
 func (i *Interceptor) waitForGrokResponse(ctx context.Context, page playwright.Page, label string) error {
 	i.log.Info("Ожидаю завершения ответа Grok", "label", label)
 

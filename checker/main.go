@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -79,7 +80,24 @@ func main() {
 	if len(os.Args) > 1 {
 		proxyflag = os.Args[1]
 	}
-	twitter, remaining := checker.CollectTwitters(ctx, db, uniqaddresses, proxyflag)
+	
+	arkham, err := checker.NewArkhamClient(checker.ArkhamConfig{
+		Cookie:    os.Getenv("cookie"),
+		ProxyFile: "proxy.txt",
+		RPS:       15,
+		Burst:     5,
+		Flag:      proxyflag,
+	})
+	if err != nil {
+		slog.Error("Failed to initialize Arkham client", "err", err)
+		os.Exit(1)
+	}
+
+	twitter, remaining, err := checker.CollectTwitters(ctx, db, arkham, uniqaddresses)
+	if err != nil {
+		slog.Error("CollectTwitters failed", "err", err)
+		os.Exit(1)
+	}
 
 	//удаляем отчеканные адреса и оставляем остатки, если есть
 	slog.Info("Saving remaining to addresses.txt!")
@@ -97,12 +115,29 @@ func main() {
 	}
 
 	slog.Info("Найдено Twitter аккаунтов", "count", len(twitter))
-	tgUsernames := Resolver.CheckUsernames(twitter)
+	
+	appID, err := strconv.Atoi(os.Getenv("APP_ID"))
+	if err != nil {
+		slog.Error("failed to convert string(app_id) to int(app_id)", "err", err)
+		os.Exit(1)
+	}
+	appHash := os.Getenv("APP_HASH")
+	botToken := os.Getenv("BOT_TOKEN")
+	
+	resolver := Resolver.NewResolver(appID, appHash, botToken)
+	tgUsernames, err := resolver.CheckUsernames(ctx, twitter)
+	if err != nil {
+		slog.Error("Failed to check telegram usernames", "err", err)
+		os.Exit(1)
+	}
 	slog.Info("Резолвинг Telegram завершен", "count", len(tgUsernames))
 
 	// Сохраняем в result.txt (старый вывод)
-	twitterOutput(twitter, tgUsernames)
-	slog.Info("Успешно сохранил твиттер и тг в result.txt")
+	if err := twitterOutput(twitter, tgUsernames); err != nil {
+		slog.Error("Failed to output twitter", "err", err)
+	} else {
+		slog.Info("Успешно сохранил твиттер и тг в result.txt")
+	}
 
 	// Отправка на Grok через пул воркеров
 	slog.Info("Запускаю обработку через Grok...")
@@ -233,13 +268,18 @@ func processWithGrok(ctx context.Context, twitterUsers []string) (map[string]str
 
 // saveToGoogleSheets сохраняет данные в Google Sheets
 func saveToGoogleSheets(ctx context.Context, wallets, twitter, tgUsernames, pastes []string) error {
-	gs, err := gsheets.NewGhsheet(ctx, twitter, wallets, tgUsernames, pastes)
+	gs, err := gsheets.NewGhsheet(ctx)
 	if err != nil {
 		return fmt.Errorf("создание GSheets клиента: %w", err)
 	}
 	defer gs.Close()
 
-	url, err := gs.CreateTable()
+	url, err := gs.CreateTable(gsheets.TableData{
+		Wallets:     wallets,
+		Twitter:     twitter,
+		TgUsernames: tgUsernames,
+		Pastes:      pastes,
+	})
 	if err != nil {
 		return fmt.Errorf("создание таблицы: %w", err)
 	}
@@ -251,11 +291,10 @@ func saveToGoogleSheets(ctx context.Context, wallets, twitter, tgUsernames, past
 }
 
 // вывод в .txt ссылок твиттера и юзернеймов тг
-func twitterOutput(twitter []string, tgUsernames []string) {
+func twitterOutput(twitter []string, tgUsernames []string) error {
 	res, err := os.OpenFile("result.txt", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		slog.Error("Failed to read or create .txt file")
-		os.Exit(1)
+		return fmt.Errorf("failed to read or create .txt file: %w", err)
 	}
 	defer res.Close()
 
@@ -276,6 +315,7 @@ func twitterOutput(twitter []string, tgUsernames []string) {
 	}
 
 	if err := w.Flush(); err != nil {
-		slog.Error("Failed to flush output", "err", err)
+		return fmt.Errorf("failed to flush output: %w", err)
 	}
+	return nil
 }

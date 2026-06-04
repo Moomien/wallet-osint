@@ -33,14 +33,19 @@ func TestGsheets(t *testing.T) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	gsheet, err := NewGhsheet(ctx, slice1, slice2, slice3, slice4)
+	gsheet, err := NewGhsheet(ctx)
 	if err != nil {
 		t.Fatal(err)
 		return
 	}
 	defer gsheet.Close()
 
-	url, err := gsheet.CreateTable()
+	url, err := gsheet.CreateTable(TableData{
+		Twitter:     slice1,
+		Wallets:     slice2,
+		TgUsernames: slice3,
+		Pastes:      slice4,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

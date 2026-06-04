@@ -1,27 +1,37 @@
 package checker
 
 import (
-	"arkham_checker/checker/ratelimiter"
 	"arkham_checker/checker/storage"
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand"
-	"os"
-	"strconv"
-	"strings"
 	"sync"
-	"time"
-
-	"github.com/go-resty/resty/v2"
-	"github.com/tidwall/gjson"
+	"golang.org/x/time/rate"
 )
 
-// возвращает линки и остатки адресов если есть
-func CollectTwitters(ctx context.Context, db storage.Storage, addresses []string, flag string) ([]string, []string) {
-	goLimiter := ratelimiter.NewRateLimiter(15, 5)
-	client := resty.New().SetRateLimiter(goLimiter)
+// restyLimiter — адаптер rate.Limiter для resty (Wait вместо Allow)
+type restyLimiter struct {
+	limiter *rate.Limiter
+}
 
+func newRestyLimiter(rps, burst int) *restyLimiter {
+	return &restyLimiter{limiter: rate.NewLimiter(rate.Limit(rps), burst)}
+}
+
+func (r *restyLimiter) Allow() bool {
+	if err := r.limiter.Wait(context.Background()); err != nil {
+		return false
+	}
+	return true
+}
+
+// TwitterFetcher — интерфейс для получения Twitter по адресу
+type TwitterFetcher interface {
+	FetchTwitter(ctx context.Context, address string) (string, error)
+}
+
+// возвращает линки и остатки адресов если есть
+func CollectTwitters(ctx context.Context, db storage.Storage, fetcher TwitterFetcher, addresses []string) ([]string, []string, error) {
 	twitter := make([]string, len(addresses))
 	completed := make([]bool, len(addresses))
 
@@ -36,18 +46,23 @@ func CollectTwitters(ctx context.Context, db storage.Storage, addresses []string
 			go func(idx int, adr string) {
 				defer wg.Done()
 
-				tw := fetchTwitterWithRetry(ctx, client, adr, flag)
-				if tw == "Canceled" {
+				tw, err := fetcher.FetchTwitter(ctx, adr)
+				if err != nil {
+					if ctx.Err() != nil {
+						return // Canceled
+					}
+					completed[idx] = true
+					slog.Info(fmt.Sprintf("%d Failed to fetch wallet %s", idx, adr), "MSG", err)
 					return
 				}
 
-				if tw != "Nope" && tw != "Failed to fetch" {
+				if tw != "" {
 					twitter[idx] = tw
 					slog.Info(fmt.Sprintf("%d Fetch wallet %s Twitter %s", idx, adr, tw))
 					return
 				}
+				
 				completed[idx] = true
-				slog.Info(fmt.Sprintf("%d Failed to fetch wallet %s", idx, adr), "MSG", tw)
 			}(i, adres)
 		}
 	}
@@ -65,10 +80,10 @@ wait:
 	}
 
 	if err := db.Save(batch); err != nil {
-		slog.Error("DB Saver", "error", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("DB Saver error: %w", err)
 	}
 	slog.Info("Успешно сохранил адреса в бд")
+	
 	//очистка от пустых значений
 	keep := 0
 	for i := range twitter {
@@ -78,111 +93,7 @@ wait:
 		}
 	}
 	twitter = twitter[:keep]
-	return twitter, rem
+	return twitter, rem, nil
 }
 
-type ctxKey string
 
-const proxykey ctxKey = "request_proxy"
-
-func fetchTwitterWithRetry(ctx context.Context, client *resty.Client, address string, flag string) string {
-	url := arkhamURL(address)
-
-	exponenntialBackoff := []time.Duration{
-		1 * time.Second, 2 * time.Second, 4 * time.Second,
-		8 * time.Second, 16 * time.Second, 30 * time.Second,
-	}
-
-	for attempt := 0; attempt < 6; attempt++ {
-		select {
-		case <-ctx.Done():
-			return "Canceled"
-		default:
-			resp, err := newArkhamRequest(client, flag).SetContext(ctx).Get(url)
-			if err != nil {
-				if ctx.Err() != nil {
-					return "Canceled"
-				}
-				slog.Error(fmt.Sprintf("Failed to request %s, retrying %d", address, attempt+1), "Error", err)
-				continue
-			}
-
-			if resp.StatusCode() == 429 {
-				duration := resp.Header().Get("Retry-After")
-				var sleepDur time.Duration
-				//джиттер чтобы избежать эффект грохочущего стада
-				jitter := time.Duration(rand.Intn(30000)) * time.Millisecond
-
-				dur, err := strconv.ParseInt(duration, 10, 64)
-				if err == nil {
-					sleepDur = time.Duration(dur)*time.Second + jitter
-				}
-				if sleepDur == 0 {
-					sleepDur = exponenntialBackoff[attempt] + jitter
-				}
-				slog.Info(fmt.Sprintf("429: too many requests, sleep for %v seconds for wallet: %s", sleepDur, address))
-
-				select {
-				case <-ctx.Done():
-					return "Canceled"
-				case <-time.After(sleepDur):
-					time.Sleep(sleepDur)
-					continue
-				}
-			}
-
-			if resp.StatusCode() == 200 {
-				twitter := gjson.Get(resp.String(), "arkhamEntity.twitter")
-				if !twitter.Exists() {
-					return "Nope"
-				}
-				return twitter.String()
-			}
-		}
-	}
-
-	return "Failed to fetch"
-}
-
-func newArkhamRequest(client *resty.Client, flag string) *resty.Request {
-	cookie := os.Getenv("cookie")
-	if flag == "proxy" {
-		selectproxy, err := getProxy()
-		if err != nil {
-			return nil
-		}
-		return client.SetProxy(selectproxy()).NewRequest().SetHeader("Connection", "keep-alive").SetHeader("Accept", "application/json").
-			SetHeader("Accept-language", "en-US,en;q=0.9").SetHeader("Origin", "https://intel.arkm.com").
-			SetHeader("pragma", "no-cache").SetHeader("priority", "u=1, i").SetHeader("Referer", "https://intel.arkm.com/").
-			SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36").
-			SetHeader("Cookie", cookie)
-	}
-
-	return client.NewRequest().SetHeader("Connection", "keep-alive").SetHeader("Accept", "application/json").
-		SetHeader("Accept-language", "en-US,en;q=0.9").SetHeader("Origin", "https://intel.arkm.com").
-		SetHeader("pragma", "no-cache").SetHeader("priority", "u=1, i").SetHeader("Referer", "https://intel.arkm.com/").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36").
-		SetHeader("Cookie", cookie)
-}
-
-func getProxy() (func() string, error) {
-	file, err := os.ReadFile("proxy.txt")
-	if err != nil {
-		return nil, err
-	}
-	str := strings.Split(string(file), "\r\n")
-	lastProxy := str[rand.Intn(len(str))]
-
-	return func() string {
-		newProxy := str[rand.Intn(len(str))]
-		for newProxy == lastProxy {
-			newProxy = str[rand.Intn(len(str))]
-		}
-		lastProxy = newProxy
-		return newProxy
-	}, nil
-}
-
-func arkhamURL(address string) string {
-	return "https://api.arkm.com/intelligence/address/" + strings.TrimSpace(address)
-}

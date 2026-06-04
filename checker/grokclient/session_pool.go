@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// SessionPool управляет пулом сессий для параллельной работы
+// управляет пулом сессий для параллельной работы
 type SessionPool struct {
 	config   *GrokConfig
 	sessions []string
-	log      *log.Logger
+	log      log.Log
 }
 
-// NewSessionPool создаёт новый пул сессий
+// создаёт новый пул сессий
 func NewSessionPool(config *GrokConfig) *SessionPool {
 	logger, err := log.NewLogger("SessionPool")
 	if err != nil {
@@ -31,7 +31,8 @@ func NewSessionPool(config *GrokConfig) *SessionPool {
 	}
 }
 
-// RunThrottledWorkers запускает воркеры для обработки пользователей
+//	запускает воркеры для обработки пользователей
+//
 // с ограничением частоты запросов (1 RPS) на уровне сессий.
 // Поддерживает автоматический повтор запросов при ошибке 429.
 func (sp *SessionPool) RunWorkers(

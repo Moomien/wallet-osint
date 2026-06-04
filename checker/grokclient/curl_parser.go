@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// ParseCurlCommand парсит curl команду и возвращает SessionConfig
+// парсит curl команду и возвращает SessionConfig
 func ParseCurlCommand(curlCmd string) (*SessionConfig, error) {
 	// Убираем переносы строк и лишние пробелы
 	curlCmd = strings.ReplaceAll(curlCmd, "\\\n", " ")
@@ -71,7 +71,8 @@ func ParseCurlCommand(curlCmd string) (*SessionConfig, error) {
 	}, nil
 }
 
-// LoadSessionsFromDirectory загружает все .txt файлы из папки и парсит их как curl команды
+//	загружает все .txt файлы из папки и парсит их как curl команды
+//
 // Имя файла (без расширения) становится именем сессии
 func LoadSessionsFromDirectory(dirPath string, logger *log.Logger) (map[string]*SessionConfig, error) {
 	sessions := make(map[string]*SessionConfig)
