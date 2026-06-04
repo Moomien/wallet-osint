@@ -5,8 +5,8 @@ data/db/*
 !data/db/.gitkeep
 data/logs/*
 !data/logs/.gitkeep
-data/grok/grok.com/cookies/*
-!data/grok/grok.com/cookies/.gitkeep
+walletchecker/data/grok/grok.com/cookies/*
+!walletchecker/data/grok/grok.com/cookies/.gitkeep
 data/grok/grok.com/cache.json
 data/grok/xai/accounts/*
 !data/grok/xai/accounts/.gitkeep
