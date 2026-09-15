@@ -44,8 +44,9 @@ BOT_TOKEN=8612017277:AAGTqgIxQvdt19a0uI2lyfOKDaFfFlDkJ6s
 2. Подготовь файлы:
    - `addresses.txt` — список кошельков (по одному на строку)
    - `proxy.txt` (опционально) — прокси в формате `http://логин:пароль@адрес:порт`
-   - `data/grok/grok.com/cookies/` — JSON файлы с куками для Grok
-   - `data/grok/xai/accounts/` — .txt файлы с аккаунтами Grok
+   - `data/grok/grok.com/cookies/` — JSON файлы с **куками** для Grok
+   - `data/grok/xai/accounts/` — .txt файлы с аккаунтами xai
+    Для работы с xAI необходимо предоставить curl запрос к апи XAI. Его можно взять из devtools. 
    - `prompt.txt` — промпт для анализа через Grok
 
 3. Запусти:
